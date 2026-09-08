@@ -68,3 +68,40 @@ uv sync --all-groups
   ```bash
   uv add --dev <nome-do-pacote>
   ```
+
+---
+
+## 🗄️ Banco de Dados e Migrações (Alembic)
+
+O projeto utiliza o **Alembic** para versionamento e controle de migrações do PostgreSQL.
+
+### Como funciona
+
+* **`alembic/versions/`:** Guarda o histórico de migrações (scripts com `upgrade()` e `downgrade()`). Esses arquivos são versionados no Git.
+* **`alembic/env.py`:** Conecta ao banco usando a `DATABASE_URL` do `.env` e compara os modelos SQLAlchemy (`Base.metadata`) com o banco real.
+
+### Fluxo de trabalho com o banco
+
+1. **Configurar variáveis de ambiente:**
+   Copie o arquivo de exemplo e preencha sua string de conexão:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Aplicar as migrações no banco (atualizar banco local):**
+   Toda vez que você puxar código novo do Git, aplique as migrações pendentes:
+   ```bash
+   uv run alembic upgrade head
+   ```
+
+3. **Criar uma nova migração (após alterar/criar modelos SQLAlchemy):**
+   ```bash
+   uv run alembic revision --autogenerate -m "descreva a alteracao"
+   ```
+   *Um novo arquivo será gerado em `alembic/versions/`. Revise o código gerado antes de commitar.*
+
+4. **Reverter a última migração (se necessário):**
+   ```bash
+   uv run alembic downgrade -1
+   ```
+
