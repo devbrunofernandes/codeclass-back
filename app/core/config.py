@@ -1,4 +1,4 @@
-from typing import List
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "CodeClass API"
     ENVIRONMENT: str = "development"
     API_V1_STR: str = "/api/v1"
-    CORS_ORIGINS: List[str] = [
+    CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
     ]

@@ -31,3 +31,7 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
+
+# Supabase Local
+supabase/.temp/
+supabase/.branches/
