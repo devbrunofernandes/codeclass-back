@@ -26,6 +26,9 @@ htmlcov/
 # Ruff / Linter
 .ruff_cache/
 
+# Mypy / Type Checker
+.mypy_cache/
+
 # IDEs
 .idea/
 .vscode/
