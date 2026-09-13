@@ -60,6 +60,9 @@ class CurrentUserProfileResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class UserUpdateRequest(BaseModel):
-    full_name: str | None = Field(default=None, min_length=2, max_length=255)
-    password: str | None = Field(default=None, min_length=6)
+class UserProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=255)
+
+
+class UserPasswordChangeRequest(BaseModel):
+    password: str = Field(min_length=6)

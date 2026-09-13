@@ -2,7 +2,7 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,7 +11,11 @@ from app.api.deps import get_current_active_member, get_current_user, get_db
 from app.models.organization import OrganizationMember
 from app.models.user import User
 from app.schemas.organization import OrganizationMemberResponse
-from app.schemas.user import CurrentUserProfileResponse, UserUpdateRequest
+from app.schemas.user import (
+    CurrentUserProfileResponse,
+    UserPasswordChangeRequest,
+    UserProfileUpdateRequest,
+)
 from app.services.auth_service import AuthError, auth_service
 
 logger = logging.getLogger(__name__)
@@ -22,20 +26,14 @@ router = APIRouter()
 @router.patch(
     "/me",
     response_model=CurrentUserProfileResponse,
-    summary="Atualiza dados do perfil ou senha do usuário autenticado",
+    summary="Atualiza dados cadastrais do próprio perfil",
 )
 async def update_my_profile(
-    request: UserUpdateRequest,
+    request: UserProfileUpdateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CurrentUserProfileResponse:
-    if request.full_name is None and request.password is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pelo menos um campo ('full_name' ou 'password') deve ser informado para atualização.",
-        )
-
     user_id = current_user.id
     old_full_name = current_user.full_name
 
@@ -43,35 +41,33 @@ async def update_my_profile(
         await auth_service.update_auth_user(
             user_id=user_id,
             full_name=request.full_name,
-            password=request.password,
         )
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
 
-    if request.full_name is not None:
-        current_user.full_name = request.full_name
+    current_user.full_name = request.full_name
+    try:
+        db.add(current_user)
+        await db.commit()
+        await db.refresh(current_user)
+    except Exception as e:
+        await db.rollback()
+        # Rollback compensatório no Supabase Auth para restaurar o nome anterior
         try:
-            db.add(current_user)
-            await db.commit()
-            await db.refresh(current_user)
-        except Exception as e:
-            await db.rollback()
-            # Rollback compensatório no Supabase Auth para restaurar o estado original
-            try:
-                await auth_service.update_auth_user(
-                    user_id=user_id,
-                    full_name=old_full_name,
-                )
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao reverter metadados no auth provider no rollback de usuário %s: %s",
-                    user_id,
-                    cleanup_err,
-                )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Erro ao atualizar usuário no banco de dados: {e!s}",
-            ) from e
+            await auth_service.update_auth_user(
+                user_id=user_id,
+                full_name=old_full_name,
+            )
+        except AuthError as cleanup_err:
+            logger.warning(
+                "Falha ao reverter metadados no auth provider no rollback de usuário %s: %s",
+                user_id,
+                cleanup_err,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao atualizar usuário no banco de dados: {e!s}",
+        ) from e
 
     return CurrentUserProfileResponse(
         id=current_user.id,
@@ -84,6 +80,27 @@ async def update_my_profile(
         is_active=current_member.is_active,
         created_at=current_user.created_at,
     )
+
+
+@router.put(
+    "/me/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Altera a senha do usuário autenticado",
+)
+async def update_my_password(
+    request: UserPasswordChangeRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    _current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+) -> Response:
+    try:
+        await auth_service.update_auth_user(
+            user_id=current_user.id,
+            password=request.password,
+        )
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

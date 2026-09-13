@@ -69,12 +69,33 @@ async def test_update_users_me_full_name(async_client: AsyncClient, setup_user_a
     mock_update.assert_awaited_once_with(
         user_id=user_data["user_id"],
         full_name="Novo Nome Completo",
-        password=None,
     )
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_password(async_client: AsyncClient, setup_user_and_org, monkeypatch):
+async def test_update_users_me_name_validation_errors(async_client: AsyncClient, setup_user_and_org):
+    user_data = setup_user_and_org
+    token = user_data["token"]
+
+    # Nome curto (< 2 caracteres)
+    res_short = await async_client.patch(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"full_name": "A"},
+    )
+    assert res_short.status_code == 422
+
+    # Corpo vazio (campo obrigatório ausente)
+    res_empty = await async_client.patch(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+    assert res_empty.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_change_password_success(async_client: AsyncClient, setup_user_and_org, monkeypatch):
     user_data = setup_user_and_org
     token = user_data["token"]
 
@@ -87,84 +108,100 @@ async def test_update_users_me_password(async_client: AsyncClient, setup_user_an
     )
     monkeypatch.setattr(auth_service, "update_auth_user", mock_update)
 
-    res = await async_client.patch(
-        "/api/v1/users/me",
+    res = await async_client.put(
+        "/api/v1/users/me/password",
         headers={"Authorization": f"Bearer {token}"},
         json={"password": "newsecretpassword123"},
     )
-    assert res.status_code == 200
+    assert res.status_code == 204
     mock_update.assert_awaited_once_with(
         user_id=user_data["user_id"],
-        full_name=None,
         password="newsecretpassword123",
     )
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_both_name_and_password(
-    async_client: AsyncClient, setup_user_and_org, monkeypatch
-):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
-    mock_update = AsyncMock(
-        return_value={
-            "id": user_data["user_id"],
-            "email": user_data["email"],
-            "full_name": "Nome Atualizado",
-        }
-    )
-    monkeypatch.setattr(auth_service, "update_auth_user", mock_update)
-
-    res = await async_client.patch(
-        "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"full_name": "Nome Atualizado", "password": "novasenhaforte456"},
-    )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["full_name"] == "Nome Atualizado"
-    mock_update.assert_awaited_once_with(
-        user_id=user_data["user_id"],
-        full_name="Nome Atualizado",
-        password="novasenhaforte456",
-    )
-
-
-@pytest.mark.asyncio
-async def test_update_users_me_empty_body(async_client: AsyncClient, setup_user_and_org):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
-    res = await async_client.patch(
-        "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
-        json={},
-    )
-    assert res.status_code == 400
-    assert "pelo menos um campo" in res.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_update_users_me_validation_errors(async_client: AsyncClient, setup_user_and_org):
+async def test_change_password_validation_error(async_client: AsyncClient, setup_user_and_org):
     user_data = setup_user_and_org
     token = user_data["token"]
 
     # Senha curta (< 6 caracteres)
-    res_pass = await async_client.patch(
-        "/api/v1/users/me",
+    res = await async_client.put(
+        "/api/v1/users/me/password",
         headers={"Authorization": f"Bearer {token}"},
         json={"password": "123"},
     )
-    assert res_pass.status_code == 422
+    assert res.status_code == 422
 
-    # Nome curto (< 2 caracteres)
-    res_name = await async_client.patch(
-        "/api/v1/users/me",
+    # Corpo vazio
+    res_empty = await async_client.put(
+        "/api/v1/users/me/password",
         headers={"Authorization": f"Bearer {token}"},
-        json={"full_name": "A"},
+        json={},
     )
-    assert res_name.status_code == 422
+    assert res_empty.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_change_password_unauthorized(async_client: AsyncClient):
+    res = await async_client.put(
+        "/api/v1/users/me/password",
+        json={"password": "newsecretpassword123"},
+    )
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_change_password_deactivated_user(
+    async_client: AsyncClient, setup_user_and_org, create_access_token, monkeypatch
+):
+    user_data = setup_user_and_org
+    owner_token = user_data["token"]
+    org_id = user_data["org_id"]
+
+    student_id = uuid.uuid4()
+    student_email = f"student_deact_{student_id.hex[:6]}@example.com"
+    student_name = "Aluno Inativo"
+
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(return_value={"id": student_id, "email": student_email, "full_name": student_name}),
+    )
+
+    # 1. Cadastra aluno
+    await async_client.post(
+        f"/api/v1/orgs/{org_id}/members",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": student_email,
+            "full_name": student_name,
+            "password": "password123",
+            "role": OrgRole.STUDENT.value,
+        },
+    )
+
+    # 2. Desativa o aluno
+    await async_client.patch(
+        f"/api/v1/orgs/{org_id}/members/{student_id}/status",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"is_active": False},
+    )
+
+    # 3. Aluno inativo tenta trocar senha -> 403
+    deactivated_token = create_access_token(
+        user_id=student_id,
+        email=student_email,
+        full_name=student_name,
+    )
+
+    res = await async_client.put(
+        "/api/v1/users/me/password",
+        headers={"Authorization": f"Bearer {deactivated_token}"},
+        json={"password": "newsecretpassword123"},
+    )
+    assert res.status_code == 403
+    assert "desativado" in res.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
