@@ -2,7 +2,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_member, get_current_user, get_db
@@ -44,20 +43,10 @@ async def login(
     user = result.scalar_one_or_none()
 
     if user is None:
-        # Lazy sync se necessário
-        user = User(
-            id=user_id,
-            email=auth_data["email"],
-            full_name=auth_data["full_name"] or auth_data["email"].split("@")[0],
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário não possui vínculo com nenhuma organização.",
         )
-        try:
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-        except IntegrityError:
-            await db.rollback()
-            result = await db.execute(select(User).where(User.id == user_id))
-            user = result.scalar_one()
 
     # Consulta vínculo organizacional
     member_res = await db.execute(
@@ -65,7 +54,13 @@ async def login(
     )
     member = member_res.scalar_one_or_none()
 
-    if member is not None and not member.is_active:
+    if member is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário não possui vínculo com nenhuma organização.",
+        )
+
+    if not member.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acesso de usuário desativado na organização.",
@@ -76,8 +71,8 @@ async def login(
         refresh_token=auth_data.get("refresh_token"),
         token_type="bearer",
         user=UserResponse.model_validate(user),
-        role=member.role if member else None,
-        organization_id=member.organization_id if member else None,
+        role=member.role,
+        organization_id=member.organization_id,
     )
 
 

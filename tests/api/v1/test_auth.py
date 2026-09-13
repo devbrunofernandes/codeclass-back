@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import OrgRole
+from app.models.user import User
 from app.services.auth_service import AuthError, auth_service
 
 
@@ -173,4 +175,31 @@ async def test_login_deactivated_user(async_client: AsyncClient, sample_user_and
     )
     assert login_res.status_code == 403
     assert "desativado" in login_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_login_user_without_organization_returns_403(
+    async_client: AsyncClient, monkeypatch, db_session: AsyncSession
+):
+    orphan_id = uuid.uuid4()
+    orphan_email = f"orphan_{orphan_id.hex[:6]}@example.com"
+
+    mock_signin = AsyncMock(return_value={
+        "access_token": "orphan-token",
+        "refresh_token": "orphan-refresh",
+        "user_id": orphan_id,
+        "email": orphan_email,
+        "full_name": "Usuário Sem Org",
+    })
+    monkeypatch.setattr(auth_service, "sign_in_with_password", mock_signin)
+
+    res = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": orphan_email, "password": "password123"},
+    )
+    assert res.status_code == 403
+    assert "vínculo" in res.json()["detail"].lower()
+
+    # Confirma que o usuário NÃO foi persistido como órfão no banco de dados
+    assert await db_session.get(User, orphan_id) is None
 

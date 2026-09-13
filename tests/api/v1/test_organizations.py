@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import OrgRole
+from app.models.organization import Organization
+from app.models.user import User
 from app.services.auth_service import auth_service
 
 
@@ -149,7 +153,7 @@ async def test_get_organization_and_tenant_isolation(
 
 @pytest.mark.asyncio
 async def test_update_and_delete_organization_owner(
-    async_client: AsyncClient, create_access_token, monkeypatch
+    async_client: AsyncClient, create_access_token, monkeypatch, db_session: AsyncSession
 ):
     owner_id = uuid.uuid4()
     slug = f"org-up-{owner_id.hex[:6]}"
@@ -188,6 +192,81 @@ async def test_update_and_delete_organization_owner(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert del_res.status_code == 204
+
+    # Consulta pós-exclusão com o token do usuário deletado retorna 401 (usuário não existe mais)
+    get_res = await async_client.get(
+        f"/api/v1/orgs/{org_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert get_res.status_code == 401
+
+    # Validação direta no banco: Organization e User foram removidos
+    assert await db_session.get(Organization, uuid.UUID(org_id)) is None
+    assert await db_session.get(User, owner_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_deletes_all_members_and_users(
+    async_client: AsyncClient, create_access_token, monkeypatch, db_session: AsyncSession
+):
+    owner_id = uuid.uuid4()
+    teacher_id = uuid.uuid4()
+    org_slug = f"org-del-{owner_id.hex[:6]}"
+    owner_email = f"owner_{owner_id.hex[:6]}@example.com"
+    teacher_email = f"teacher_{teacher_id.hex[:6]}@example.com"
+
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(return_value={"id": owner_id, "email": owner_email, "full_name": "Owner"}),
+    )
+
+    # 1. Cria organização
+    res = await async_client.post(
+        "/api/v1/orgs",
+        json={
+            "name": "Org Multi Membros",
+            "slug": org_slug,
+            "owner": {"email": owner_email, "full_name": "Owner", "password": "password123"},
+        },
+    )
+    assert res.status_code == 201
+    org_id = res.json()["id"]
+    owner_token = create_access_token(owner_id, email=owner_email, full_name="Owner")
+
+    # 2. Adiciona um professor
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(return_value={"id": teacher_id, "email": teacher_email, "full_name": "Teacher"}),
+    )
+    member_res = await async_client.post(
+        f"/api/v1/orgs/{org_id}/members",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": teacher_email,
+            "full_name": "Teacher",
+            "password": "password123",
+            "role": OrgRole.TEACHER.value,
+        },
+    )
+    assert member_res.status_code == 201
+
+    # Confirma que ambos existem no banco
+    assert await db_session.get(User, owner_id) is not None
+    assert await db_session.get(User, teacher_id) is not None
+
+    # 3. Deleta a organização
+    del_res = await async_client.delete(
+        f"/api/v1/orgs/{org_id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert del_res.status_code == 204
+
+    # 4. Verifica no banco que a organização e TODOS os usuários foram removidos
+    assert await db_session.get(Organization, uuid.UUID(org_id)) is None
+    assert await db_session.get(User, owner_id) is None
+    assert await db_session.get(User, teacher_id) is None
 
 
 @pytest.mark.asyncio

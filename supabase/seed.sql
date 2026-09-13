@@ -32,4 +32,18 @@ BEGIN
     EXECUTE 'ALTER TABLE IF EXISTS public.submission_evaluations ENABLE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE IF EXISTS public.classroom_messages ENABLE ROW LEVEL SECURITY';
     EXECUTE 'ALTER TABLE IF EXISTS public.alembic_version ENABLE ROW LEVEL SECURITY';
+
+    -- 3. Trigger de Sincronização Bidirecional: Exclusão em public.users limpa auth.users automaticamente
+    EXECUTE $func$
+        CREATE OR REPLACE FUNCTION public.on_public_user_deleted_cleanup_auth()
+        RETURNS TRIGGER AS $body$
+        BEGIN
+            DELETE FROM auth.users WHERE id = OLD.id;
+            RETURN OLD;
+        END;
+        $body$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth;
+    $func$;
+
+    EXECUTE 'DROP TRIGGER IF EXISTS trigger_on_public_user_deleted ON public.users';
+    EXECUTE 'CREATE TRIGGER trigger_on_public_user_deleted AFTER DELETE ON public.users FOR EACH ROW EXECUTE FUNCTION public.on_public_user_deleted_cleanup_auth()';
 END $$;

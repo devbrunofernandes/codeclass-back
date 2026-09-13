@@ -1,9 +1,10 @@
+import asyncio
 import logging
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -224,8 +225,34 @@ async def delete_organization(
             detail="Organização não encontrada.",
         )
 
+    # 1. Coleta os user_id de todos os membros da organização (incluindo o owner)
+    members_res = await db.execute(
+        select(OrganizationMember.user_id).where(
+            OrganizationMember.organization_id == org_id
+        )
+    )
+    user_ids = members_res.scalars().all()
+
+    # 2. Deleta a organização (cascateia para classrooms, assignments, submissions, messages e organization_members)
     await db.delete(org)
+    await db.flush()
+
+    # 3. Deleta os usuários da organização (o trigger no PostgreSQL remove de auth.users automaticamente)
+    if user_ids:
+        await db.execute(delete(User).where(User.id.in_(user_ids)))
+
     await db.commit()
+
+    # 4. Fallback defensivo para garantir limpeza no provedor de autenticação
+    if user_ids:
+        async def _safe_delete(uid: UUID) -> None:
+            try:
+                await auth_service.delete_auth_user(uid)
+            except AuthError:
+                pass  # Já removido pelo trigger de banco
+
+        await asyncio.gather(*[_safe_delete(uid) for uid in user_ids], return_exceptions=True)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

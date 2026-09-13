@@ -5,7 +5,6 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -59,24 +58,11 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if user is None:
-        # Lazy Sync: sincroniza usuário a partir do token
-        email = payload.get("email") or ""
-        metadata = payload.get("user_metadata") or {}
-        full_name = metadata.get("full_name") or email.split("@")[0] or "Usuário"
-
-        user = User(
-            id=user_id,
-            email=email,
-            full_name=full_name,
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuário não encontrado.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        try:
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-        except IntegrityError:
-            await db.rollback()
-            result = await db.execute(select(User).where(User.id == user_id))
-            user = result.scalar_one()
 
     return user
 

@@ -42,8 +42,8 @@ class TokenResponse(BaseModel):
     refresh_token: str | None = None
     token_type: str = "bearer"
     user: UserResponse
-    role: OrgRole | None = None
-    organization_id: UUID | None = None
+    role: OrgRole
+    organization_id: UUID
 
 
 class CurrentUserProfileResponse(BaseModel):
