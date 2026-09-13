@@ -214,7 +214,7 @@ def test_model_relationships():
 
 def test_initial_migration_script():
     """Verify that Alembic initial migration script is syntactically valid and has upgrade/downgrade."""
-    versions_dir = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+    versions_dir = Path(__file__).resolve().parent.parent.parent / "alembic" / "versions"
     migration_files = list(versions_dir.glob("*_initial_schema.py"))
     assert migration_files, f"No initial migration file found in {versions_dir}"
     migration_path = migration_files[0]
