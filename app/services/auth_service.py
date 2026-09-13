@@ -3,6 +3,7 @@ from uuid import UUID
 
 import anyio
 from jose import JWTError, jwt
+from supabase_auth.types import AdminUserAttributes
 
 from app.core.config import settings
 from supabase import Client, ClientOptions, create_client
@@ -163,6 +164,42 @@ class AuthService:
             if isinstance(e, AuthError):
                 raise
             raise AuthError("Token inválido ou expirado.", status_code=401) from e
+
+    async def update_auth_user(
+        self,
+        user_id: UUID | str,
+        *,
+        full_name: str | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Atualiza metadados ou credenciais do usuário no provedor de autenticação."""
+        attributes: AdminUserAttributes = {}
+        if password is not None:
+            attributes["password"] = password
+        if full_name is not None:
+            attributes["user_metadata"] = {"full_name": full_name}
+
+        if not attributes:
+            return {"id": str(user_id)}
+
+        try:
+            res = await anyio.to_thread.run_sync(
+                lambda: self.admin_client.auth.admin.update_user_by_id(
+                    str(user_id),
+                    attributes,
+                )
+            )
+            if not res or not res.user:
+                raise AuthError("Falha ao atualizar usuário no provedor de autenticação.")
+            return {
+                "id": UUID(res.user.id),
+                "email": res.user.email,
+                "full_name": (res.user.user_metadata or {}).get("full_name", full_name),
+            }
+        except Exception as e:
+            if isinstance(e, AuthError):
+                raise
+            raise AuthError(f"Erro ao atualizar usuário no provedor: {e!s}") from e
 
 
 auth_service = AuthService()
