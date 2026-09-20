@@ -221,6 +221,28 @@ async def test_get_my_classes(
     assert classes_s[0]["id"] == str(c1.id)
     assert classes_s[0]["role_in_class"] == "student"
 
+    # Strategy Pattern: Owner visualiza todas as turmas da instituição com role_in_class == "owner"
+    owner_token = create_access_token(user_id=env["owner"].id)
+    res_owner = await async_client.get(
+        "/api/v1/classrooms/my-classes",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_owner.status_code == 200
+    classes_owner = res_owner.json()
+    assert len(classes_owner) == 2
+    assert all(c["role_in_class"] == "owner" for c in classes_owner)
+
+    # Strategy Pattern: Admin visualiza todas as turmas da instituição com role_in_class == "admin"
+    admin_token = create_access_token(user_id=env["admin"].id)
+    res_admin = await async_client.get(
+        "/api/v1/classrooms/my-classes",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert res_admin.status_code == 200
+    classes_admin = res_admin.json()
+    assert len(classes_admin) == 2
+    assert all(c["role_in_class"] == "admin" for c in classes_admin)
+
 
 @pytest.mark.asyncio
 async def test_get_classroom_details(
@@ -374,3 +396,58 @@ async def test_delete_classroom(
         headers={"Authorization": f"Bearer {owner_token}"},
     )
     assert res_o.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_classroom_edge_cases_and_not_found(
+    async_client: AsyncClient, db_session: AsyncSession, create_access_token
+):
+    env = await setup_test_environment(db_session)
+    owner_token = create_access_token(user_id=env["owner"].id)
+    teacher_token = create_access_token(user_id=env["teacher"].id)
+    random_id = uuid.uuid4()
+
+    # 1. Buscar detalhes de sala inexistente -> 404
+    res_not_found = await async_client.get(
+        f"/api/v1/classrooms/{random_id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_not_found.status_code == 404
+
+    # 2. Atualizar sala inexistente -> 404
+    res_patch_nf = await async_client.patch(
+        f"/api/v1/classrooms/{random_id}",
+        json={"name": "Novo Nome"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_patch_nf.status_code == 404
+
+    # 3. Deletar sala inexistente -> 404
+    res_del_nf = await async_client.delete(
+        f"/api/v1/classrooms/{random_id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_del_nf.status_code == 404
+
+    # 4. Criar sala e testar desmatrícula de aluno não matriculado -> 404
+    c = Classroom(
+        id=uuid.uuid4(),
+        organization_id=env["org"].id,
+        teacher_id=env["teacher"].id,
+        name="Turma Borda",
+    )
+    db_session.add(c)
+    await db_session.commit()
+
+    res_unenroll_nf = await async_client.delete(
+        f"/api/v1/classrooms/{c.id}/students/{env['student'].id}",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+    assert res_unenroll_nf.status_code == 404
+
+    # 5. Desmatrícula em sala inexistente -> 404
+    res_unenroll_cls_nf = await async_client.delete(
+        f"/api/v1/classrooms/{random_id}/students/{env['student'].id}",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+    assert res_unenroll_cls_nf.status_code == 404

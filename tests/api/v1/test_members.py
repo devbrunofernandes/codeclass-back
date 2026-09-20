@@ -150,15 +150,104 @@ async def test_list_members_and_filters(
     org_id = org_data["org_id"]
     owner_token = org_data["owner_token"]
 
-    # Listar membros
-    res = await async_client.get(
+    # Cadastra um professor ativo e um aluno inativo para testar os filtros
+    t_id = uuid.uuid4()
+    t_email = f"prof_filtro_{t_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={
+                "id": t_id,
+                "email": t_email,
+                "full_name": "Professor Filtro",
+            }
+        ),
+    )
+    await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
         headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": t_email,
+            "full_name": "Professor Filtro",
+            "password": "password123",
+            "role": OrgRole.TEACHER.value,
+        },
     )
-    assert res.status_code == 200
-    members = res.json()
-    assert len(members) >= 1
-    assert any(m["role"] == OrgRole.OWNER.value for m in members)
+
+    s_id = uuid.uuid4()
+    s_email = f"aluno_filtro_{s_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={
+                "id": s_id,
+                "email": s_email,
+                "full_name": "Aluno Desativado",
+            }
+        ),
+    )
+    await async_client.post(
+        f"/api/v1/orgs/{org_id}/members",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": s_email,
+            "full_name": "Aluno Desativado",
+            "password": "password123",
+            "role": OrgRole.STUDENT.value,
+        },
+    )
+    # Desativa o aluno
+    await async_client.patch(
+        f"/api/v1/orgs/{org_id}/members/{s_id}/status",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"is_active": False},
+    )
+
+    # 1. Filtro por papel (role=teacher)
+    res_role = await async_client.get(
+        f"/api/v1/orgs/{org_id}/members?role=teacher",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_role.status_code == 200
+    teachers = res_role.json()
+    assert all(m["role"] == "teacher" for m in teachers)
+    assert any(m["user_id"] == str(t_id) for m in teachers)
+
+    # 2. Filtro por status (is_active=false)
+    res_inactive = await async_client.get(
+        f"/api/v1/orgs/{org_id}/members?is_active=false",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_inactive.status_code == 200
+    inactives = res_inactive.json()
+    assert any(m["user_id"] == str(s_id) for m in inactives)
+
+    # 3. Busca por texto (search por nome)
+    res_search_name = await async_client.get(
+        f"/api/v1/orgs/{org_id}/members?search=filtro",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_search_name.status_code == 200
+    assert any(m["user_id"] == str(t_id) for m in res_search_name.json())
+
+    # 4. Busca por texto (search por email)
+    res_search_email = await async_client.get(
+        f"/api/v1/orgs/{org_id}/members?search={s_email}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_search_email.status_code == 200
+    assert len(res_search_email.json()) == 1
+    assert res_search_email.json()[0]["user_id"] == str(s_id)
+
+    # 5. Paginação (limit e offset)
+    res_paged = await async_client.get(
+        f"/api/v1/orgs/{org_id}/members?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert res_paged.status_code == 200
+    assert len(res_paged.json()) == 1
 
 
 @pytest.mark.asyncio
@@ -327,3 +416,76 @@ async def test_prevent_self_and_owner_deactivation(
     )
     assert res_owner_deact.status_code == 400
     assert "proprietário" in res_owner_deact.json()["detail"].lower()
+
+    # 4. Cadastra um segundo Admin
+    admin2_id = uuid.uuid4()
+    admin2_email = f"adm2_{admin2_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={
+                "id": admin2_id,
+                "email": admin2_email,
+                "full_name": "Admin 2",
+            }
+        ),
+    )
+    await async_client.post(
+        f"/api/v1/orgs/{org_id}/members",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": admin2_email,
+            "full_name": "Admin 2",
+            "password": "password123",
+            "role": OrgRole.ADMIN.value,
+        },
+    )
+
+    # 5. Admin tenta desativar outro Admin -> bloqueio 403 (apenas Owner pode)
+    res_adm_deact = await async_client.patch(
+        f"/api/v1/orgs/{org_id}/members/{admin2_id}/status",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"is_active": False},
+    )
+    assert res_adm_deact.status_code == 403
+
+    # 6. Tentativa de atribuir role=owner via endpoint de papel -> 400
+    res_put_owner = await async_client.put(
+        f"/api/v1/orgs/{org_id}/members/{admin2_id}/role",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"role": OrgRole.OWNER.value},
+    )
+    assert res_put_owner.status_code == 400
+
+    # 7. Tentativa de alterar papel do próprio Owner -> 400
+    res_mod_owner = await async_client.put(
+        f"/api/v1/orgs/{org_id}/members/{owner_id}/role",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"role": OrgRole.TEACHER.value},
+    )
+    assert res_mod_owner.status_code == 400
+
+    # 8. Admin tenta rebaixar outro Admin -> 403 (apenas Owner pode)
+    res_adm_demote = await async_client.put(
+        f"/api/v1/orgs/{org_id}/members/{admin2_id}/role",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"role": OrgRole.TEACHER.value},
+    )
+    assert res_adm_demote.status_code == 403
+
+    # 9. Membro inexistente -> 404
+    non_existent = uuid.uuid4()
+    res_nf_role = await async_client.put(
+        f"/api/v1/orgs/{org_id}/members/{non_existent}/role",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"role": OrgRole.TEACHER.value},
+    )
+    assert res_nf_role.status_code == 404
+
+    res_nf_status = await async_client.patch(
+        f"/api/v1/orgs/{org_id}/members/{non_existent}/status",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"is_active": False},
+    )
+    assert res_nf_status.status_code == 404

@@ -346,3 +346,112 @@ async def test_list_organization_classrooms_admin_and_owner(
     )
     assert cls_res.status_code == 200
     assert isinstance(cls_res.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_organization_and_transfer_ownership_edge_cases(
+    async_client: AsyncClient, create_access_token, monkeypatch
+):
+    owner_id = uuid.uuid4()
+    slug = f"org-edge-{owner_id.hex[:6]}"
+    email = f"owner_{owner_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Owner"}),
+    )
+
+    res = await async_client.post(
+        "/api/v1/orgs",
+        json={
+            "name": "Org Edge",
+            "slug": slug,
+            "owner": {"email": email, "full_name": "Owner", "password": "password123"},
+        },
+    )
+    assert res.status_code == 201
+    org_id = res.json()["id"]
+    owner_token = create_access_token(owner_id, email=email, full_name="Owner")
+
+    # 1. Cria uma segunda org para testar conflito de slug no update
+    owner2_id = uuid.uuid4()
+    slug2 = f"org-edge2-{owner2_id.hex[:6]}"
+    email2 = f"owner2_{owner2_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={"id": owner2_id, "email": email2, "full_name": "Owner 2"}
+        ),
+    )
+    await async_client.post(
+        "/api/v1/orgs",
+        json={
+            "name": "Org Edge 2",
+            "slug": slug2,
+            "owner": {
+                "email": email2,
+                "full_name": "Owner 2",
+                "password": "password123",
+            },
+        },
+    )
+
+    # 2. Tenta atualizar slug da Org 1 para o slug da Org 2 -> 409
+    res_conflict = await async_client.patch(
+        f"/api/v1/orgs/{org_id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"slug": slug2},
+    )
+    assert res_conflict.status_code == 409
+
+    # 3. Transferir posse para si mesmo -> 400
+    res_transfer_self = await async_client.put(
+        f"/api/v1/orgs/{org_id}/owner",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"new_owner_id": str(owner_id)},
+    )
+    assert res_transfer_self.status_code == 400
+
+    # 4. Transferir posse para usuário inexistente / não membro -> 404
+    non_member_id = uuid.uuid4()
+    res_transfer_nf = await async_client.put(
+        f"/api/v1/orgs/{org_id}/owner",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"new_owner_id": str(non_member_id)},
+    )
+    assert res_transfer_nf.status_code == 404
+
+    # 5. Cadastra membro, desativa e tenta transferir posse para membro inativo -> 400
+    m_id = uuid.uuid4()
+    m_email = f"m_{m_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={"id": m_id, "email": m_email, "full_name": "Membro Inativo"}
+        ),
+    )
+    await async_client.post(
+        f"/api/v1/orgs/{org_id}/members",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "email": m_email,
+            "full_name": "Membro Inativo",
+            "password": "password123",
+            "role": OrgRole.TEACHER.value,
+        },
+    )
+    await async_client.patch(
+        f"/api/v1/orgs/{org_id}/members/{m_id}/status",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"is_active": False},
+    )
+
+    res_transfer_inactive = await async_client.put(
+        f"/api/v1/orgs/{org_id}/owner",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"new_owner_id": str(m_id)},
+    )
+    assert res_transfer_inactive.status_code == 400
+    assert "desativado" in res_transfer_inactive.json()["detail"].lower()
