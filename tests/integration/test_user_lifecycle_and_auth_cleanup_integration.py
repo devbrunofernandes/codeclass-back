@@ -51,7 +51,9 @@ async def test_delete_organization_cleans_up_auth_users_table(
             {"id": owner_uuid},
         )
     ).scalar_one_or_none()
-    assert owner_auth_pre is not None, "Owner deve existir na tabela auth.users antes da deleção"
+    assert owner_auth_pre is not None, (
+        "Owner deve existir na tabela auth.users antes da deleção"
+    )
 
     teacher_auth_pre = (
         await db_session.execute(
@@ -59,7 +61,9 @@ async def test_delete_organization_cleans_up_auth_users_table(
             {"id": teacher_uuid},
         )
     ).scalar_one_or_none()
-    assert teacher_auth_pre is not None, "Professor deve existir na tabela auth.users antes da deleção"
+    assert teacher_auth_pre is not None, (
+        "Professor deve existir na tabela auth.users antes da deleção"
+    )
 
     # Confirma existência em public.users
     assert await db_session.get(User, owner_uuid) is not None
@@ -82,7 +86,9 @@ async def test_delete_organization_cleans_up_auth_users_table(
             {"id": owner_uuid},
         )
     ).scalar_one_or_none()
-    assert owner_auth_post is None, "Owner deve ser removido de auth.users após deleção da organização"
+    assert owner_auth_post is None, (
+        "Owner deve ser removido de auth.users após deleção da organização"
+    )
 
     teacher_auth_post = (
         await db_session.execute(
@@ -90,7 +96,9 @@ async def test_delete_organization_cleans_up_auth_users_table(
             {"id": teacher_uuid},
         )
     ).scalar_one_or_none()
-    assert teacher_auth_post is None, "Professor deve ser removido de auth.users após deleção da organização"
+    assert teacher_auth_post is None, (
+        "Professor deve ser removido de auth.users após deleção da organização"
+    )
 
     # 5. Validação direta no banco: tabelas públicas
     assert await db_session.get(Organization, org_uuid) is None
@@ -155,7 +163,9 @@ async def test_postgres_trigger_deletes_from_auth_users_on_public_user_delete(
                 {"id": user_uuid},
             )
         ).scalar_one_or_none()
-        assert auth_post is None, "Trigger deve remover o usuário correspondente de auth.users"
+        assert auth_post is None, (
+            "Trigger deve remover o usuário correspondente de auth.users"
+        )
 
     finally:
         # Limpeza defensiva caso o teste falhe antes do delete

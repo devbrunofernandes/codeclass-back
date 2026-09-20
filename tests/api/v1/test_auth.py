@@ -11,14 +11,18 @@ from app.services.auth_service import AuthError, auth_service
 
 
 @pytest.fixture
-async def sample_user_and_org(async_client: AsyncClient, create_access_token, monkeypatch):
+async def sample_user_and_org(
+    async_client: AsyncClient, create_access_token, monkeypatch
+):
     owner_id = uuid.uuid4()
     slug = f"org-auth-{owner_id.hex[:6]}"
     email = f"auth_owner_{owner_id.hex[:6]}@example.com"
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Auth Owner"}),
+        AsyncMock(
+            return_value={"id": owner_id, "email": email, "full_name": "Auth Owner"}
+        ),
     )
 
     res = await async_client.post(
@@ -26,7 +30,11 @@ async def sample_user_and_org(async_client: AsyncClient, create_access_token, mo
         json={
             "name": "Org Auth Test",
             "slug": slug,
-            "owner": {"email": email, "full_name": "Auth Owner", "password": "securepassword123"},
+            "owner": {
+                "email": email,
+                "full_name": "Auth Owner",
+                "password": "securepassword123",
+            },
         },
     )
     assert res.status_code == 201
@@ -42,18 +50,22 @@ async def sample_user_and_org(async_client: AsyncClient, create_access_token, mo
 
 
 @pytest.mark.asyncio
-async def test_login_success(async_client: AsyncClient, sample_user_and_org, monkeypatch):
+async def test_login_success(
+    async_client: AsyncClient, sample_user_and_org, monkeypatch
+):
     user_data = sample_user_and_org
     owner_id = user_data["owner_id"]
     email = user_data["email"]
 
-    mock_signin = AsyncMock(return_value={
-        "access_token": "mock-access-token",
-        "refresh_token": "mock-refresh-token",
-        "user_id": owner_id,
-        "email": email,
-        "full_name": "Auth Owner",
-    })
+    mock_signin = AsyncMock(
+        return_value={
+            "access_token": "mock-access-token",
+            "refresh_token": "mock-refresh-token",
+            "user_id": owner_id,
+            "email": email,
+            "full_name": "Auth Owner",
+        }
+    )
     monkeypatch.setattr(auth_service, "sign_in_with_password", mock_signin)
 
     res = await async_client.post(
@@ -72,7 +84,9 @@ async def test_login_success(async_client: AsyncClient, sample_user_and_org, mon
 
 @pytest.mark.asyncio
 async def test_login_invalid_credentials(async_client: AsyncClient, monkeypatch):
-    mock_signin = AsyncMock(side_effect=AuthError("Credenciais inválidas.", status_code=401))
+    mock_signin = AsyncMock(
+        side_effect=AuthError("Credenciais inválidas.", status_code=401)
+    )
     monkeypatch.setattr(auth_service, "sign_in_with_password", mock_signin)
 
     res = await async_client.post(
@@ -111,12 +125,14 @@ async def test_get_me_unauthorized(async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_refresh_token(async_client: AsyncClient, monkeypatch):
-    mock_refresh = AsyncMock(return_value={
-        "access_token": "new-access-token",
-        "refresh_token": "new-refresh-token",
-        "user_id": str(uuid.uuid4()),
-        "email": "user@example.com",
-    })
+    mock_refresh = AsyncMock(
+        return_value={
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "user_id": str(uuid.uuid4()),
+            "email": "user@example.com",
+        }
+    )
     monkeypatch.setattr(auth_service, "refresh_session", mock_refresh)
 
     res = await async_client.post(
@@ -128,7 +144,9 @@ async def test_refresh_token(async_client: AsyncClient, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_login_deactivated_user(async_client: AsyncClient, sample_user_and_org, monkeypatch):
+async def test_login_deactivated_user(
+    async_client: AsyncClient, sample_user_and_org, monkeypatch
+):
     user_data = sample_user_and_org
     owner_token = user_data["token"]
     org_id = user_data["org_id"]
@@ -139,7 +157,13 @@ async def test_login_deactivated_user(async_client: AsyncClient, sample_user_and
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": student_id, "email": student_email, "full_name": "Aluno Inativo"}),
+        AsyncMock(
+            return_value={
+                "id": student_id,
+                "email": student_email,
+                "full_name": "Aluno Inativo",
+            }
+        ),
     )
     await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -160,13 +184,15 @@ async def test_login_deactivated_user(async_client: AsyncClient, sample_user_and
     )
 
     # 3. Aluno tenta efetuar login (bloqueio 403)
-    mock_signin = AsyncMock(return_value={
-        "access_token": "token-deact",
-        "refresh_token": "refresh-deact",
-        "user_id": student_id,
-        "email": student_email,
-        "full_name": "Aluno Inativo",
-    })
+    mock_signin = AsyncMock(
+        return_value={
+            "access_token": "token-deact",
+            "refresh_token": "refresh-deact",
+            "user_id": student_id,
+            "email": student_email,
+            "full_name": "Aluno Inativo",
+        }
+    )
     monkeypatch.setattr(auth_service, "sign_in_with_password", mock_signin)
 
     login_res = await async_client.post(
@@ -184,13 +210,15 @@ async def test_login_user_without_organization_returns_403(
     orphan_id = uuid.uuid4()
     orphan_email = f"orphan_{orphan_id.hex[:6]}@example.com"
 
-    mock_signin = AsyncMock(return_value={
-        "access_token": "orphan-token",
-        "refresh_token": "orphan-refresh",
-        "user_id": orphan_id,
-        "email": orphan_email,
-        "full_name": "Usuário Sem Org",
-    })
+    mock_signin = AsyncMock(
+        return_value={
+            "access_token": "orphan-token",
+            "refresh_token": "orphan-refresh",
+            "user_id": orphan_id,
+            "email": orphan_email,
+            "full_name": "Usuário Sem Org",
+        }
+    )
     monkeypatch.setattr(auth_service, "sign_in_with_password", mock_signin)
 
     res = await async_client.post(
@@ -202,4 +230,3 @@ async def test_login_user_without_organization_returns_403(
 
     # Confirma que o usuário NÃO foi persistido como órfão no banco de dados
     assert await db_session.get(User, orphan_id) is None
-

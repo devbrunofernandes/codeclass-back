@@ -14,12 +14,14 @@ from app.api.deps import (
     get_db,
     require_admin_or_owner,
     require_owner,
+    require_teacher_admin_or_owner,
     verify_org_access,
 )
 from app.models.classroom import Classroom
 from app.models.enums import OrgRole
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
+from app.schemas.classroom import ClassroomCreateRequest, ClassroomResponse
 from app.schemas.organization import (
     ClassroomSummaryResponse,
     MemberRoleUpdateRequest,
@@ -59,9 +61,7 @@ async def register_organization(
         )
 
     # Verifica duplicidade de email
-    email_res = await db.execute(
-        select(User).where(User.email == request.owner.email)
-    )
+    email_res = await db.execute(select(User).where(User.email == request.owner.email))
     if email_res.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -116,7 +116,9 @@ async def register_organization(
         try:
             await auth_service.delete_auth_user(user_id)
         except AuthError as cleanup_err:
-            logger.warning("Falha ao remover usuário do provedor no rollback: %s", cleanup_err)
+            logger.warning(
+                "Falha ao remover usuário do provedor no rollback: %s", cleanup_err
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Organização com este slug ou usuário com este e-mail já existe.",
@@ -127,7 +129,9 @@ async def register_organization(
         try:
             await auth_service.delete_auth_user(user_id)
         except AuthError as cleanup_err:
-            logger.warning("Falha ao remover usuário do provedor no rollback: %s", cleanup_err)
+            logger.warning(
+                "Falha ao remover usuário do provedor no rollback: %s", cleanup_err
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao cadastrar organização: {e!s}",
@@ -245,13 +249,16 @@ async def delete_organization(
 
     # 4. Fallback defensivo para garantir limpeza no provedor de autenticação
     if user_ids:
+
         async def _safe_delete(uid: UUID) -> None:
             try:
                 await auth_service.delete_auth_user(uid)
             except AuthError:
                 pass  # Já removido pelo trigger de banco
 
-        await asyncio.gather(*[_safe_delete(uid) for uid in user_ids], return_exceptions=True)
+        await asyncio.gather(
+            *[_safe_delete(uid) for uid in user_ids], return_exceptions=True
+        )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -339,7 +346,10 @@ async def add_member(
         try:
             await auth_service.delete_auth_user(user_id)
         except AuthError as cleanup_err:
-            logger.warning("Falha ao remover usuário do provedor no rollback de membro: %s", cleanup_err)
+            logger.warning(
+                "Falha ao remover usuário do provedor no rollback de membro: %s",
+                cleanup_err,
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Membro com este e-mail já cadastrado.",
@@ -349,7 +359,10 @@ async def add_member(
         try:
             await auth_service.delete_auth_user(user_id)
         except AuthError as cleanup_err:
-            logger.warning("Falha ao remover usuário do provedor no rollback de membro: %s", cleanup_err)
+            logger.warning(
+                "Falha ao remover usuário do provedor no rollback de membro: %s",
+                cleanup_err,
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao cadastrar membro: {e!s}",
@@ -392,7 +405,9 @@ async def list_members(
             )
         )
 
-    stmt = stmt.order_by(OrganizationMember.joined_at.desc()).offset(offset).limit(limit)
+    stmt = (
+        stmt.order_by(OrganizationMember.joined_at.desc()).offset(offset).limit(limit)
+    )
     result = await db.execute(stmt)
     members = result.scalars().all()
 
@@ -629,3 +644,67 @@ async def list_organization_classrooms(
     classrooms = result.scalars().all()
     return [ClassroomSummaryResponse.model_validate(c) for c in classrooms]
 
+
+@router.post(
+    "/{org_id}/classrooms",
+    response_model=ClassroomResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Cria sala de aula (Teacher assume docência; Admin/Owner indicam docente)",
+)
+async def create_organization_classroom(
+    org_id: UUID,
+    request: ClassroomCreateRequest,
+    current_member: Annotated[
+        OrganizationMember, Depends(require_teacher_admin_or_owner)
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ClassroomResponse:
+    await verify_org_access(org_id, current_member)
+
+    # Define o professor responsável
+    if current_member.role == OrgRole.TEACHER:
+        teacher_id = current_member.user_id
+    else:
+        # Admin ou Owner
+        if request.teacher_id is not None:
+            stmt = select(OrganizationMember).where(
+                OrganizationMember.organization_id == org_id,
+                OrganizationMember.user_id == request.teacher_id,
+            )
+            target_res = await db.execute(stmt)
+            target_member = target_res.scalar_one_or_none()
+
+            if target_member is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="O professor indicado não pertence a esta organização.",
+                )
+            if not target_member.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="O professor indicado está inativo nesta organização.",
+                )
+            if target_member.role not in (
+                OrgRole.TEACHER,
+                OrgRole.ADMIN,
+                OrgRole.OWNER,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="O usuário indicado deve possuir papel docente ou administrativo.",
+                )
+            teacher_id = request.teacher_id
+        else:
+            teacher_id = current_member.user_id
+
+    classroom = Classroom(
+        organization_id=org_id,
+        teacher_id=teacher_id,
+        name=request.name,
+        description=request.description,
+    )
+    db.add(classroom)
+    await db.commit()
+    await db.refresh(classroom)
+
+    return ClassroomResponse.model_validate(classroom)

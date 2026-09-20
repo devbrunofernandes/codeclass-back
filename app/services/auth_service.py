@@ -56,7 +56,9 @@ class AuthService:
                 )
             )
             if not res or not res.user:
-                raise AuthError("Falha ao registrar usuário no provedor de autenticação.")
+                raise AuthError(
+                    "Falha ao registrar usuário no provedor de autenticação."
+                )
             return {
                 "id": UUID(res.user.id),
                 "email": res.user.email,
@@ -67,9 +69,7 @@ class AuthService:
                 raise
             raise AuthError(f"Erro no provedor de autenticação: {e!s}") from e
 
-    async def sign_in_with_password(
-        self, email: str, password: str
-    ) -> dict[str, Any]:
+    async def sign_in_with_password(self, email: str, password: str) -> dict[str, Any]:
         """Autentica o usuário com email e senha usando um cliente efêmero sem contaminar o admin."""
         try:
             auth_client = self._create_raw_client()
@@ -100,7 +100,9 @@ class AuthService:
                 lambda: auth_client.auth.refresh_session(refresh_token)
             )
             if not res or not res.session or not res.user:
-                raise AuthError("Token de atualização inválido ou expirado.", status_code=401)
+                raise AuthError(
+                    "Token de atualização inválido ou expirado.", status_code=401
+                )
             return {
                 "access_token": res.session.access_token,
                 "refresh_token": res.session.refresh_token,
@@ -142,10 +144,14 @@ class AuthService:
                 )
                 sub = payload.get("sub")
                 if not sub:
-                    raise AuthError("Token inválido: ausência de 'sub'.", status_code=401)
+                    raise AuthError(
+                        "Token inválido: ausência de 'sub'.", status_code=401
+                    )
                 return cast(dict[str, Any], payload)
             except JWTError as e:
-                raise AuthError(f"Token inválido ou expirado: {e!s}", status_code=401) from e
+                raise AuthError(
+                    f"Token inválido ou expirado: {e!s}", status_code=401
+                ) from e
 
         # Fallback seguro para validação no Supabase Auth usando cliente efêmero isolado
         try:
@@ -190,7 +196,9 @@ class AuthService:
                 )
             )
             if not res or not res.user:
-                raise AuthError("Falha ao atualizar usuário no provedor de autenticação.")
+                raise AuthError(
+                    "Falha ao atualizar usuário no provedor de autenticação."
+                )
             return {
                 "id": UUID(res.user.id),
                 "email": res.user.email,

@@ -43,9 +43,7 @@ class Organization(Base):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("idx_organizations_owner", "owner_id"),
-    )
+    __table_args__ = (Index("idx_organizations_owner", "owner_id"),)
 
     # Relationships
     owner: Mapped[User] = relationship(
@@ -85,7 +83,12 @@ class OrganizationMember(Base):
         unique=True,
     )
     role: Mapped[OrgRole] = mapped_column(
-        ENUM(OrgRole, name="org_role", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            OrgRole,
+            name="org_role",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(

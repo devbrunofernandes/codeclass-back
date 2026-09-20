@@ -37,7 +37,9 @@ def test_registered_tables_in_metadata():
         "classroom_messages",
     }
     actual_tables = set(Base.metadata.tables.keys())
-    assert expected_tables.issubset(actual_tables), f"Missing tables: {expected_tables - actual_tables}"
+    assert expected_tables.issubset(actual_tables), (
+        f"Missing tables: {expected_tables - actual_tables}"
+    )
 
 
 def test_enums():
@@ -45,7 +47,12 @@ def test_enums():
     assert [e.value for e in OrgRole] == ["owner", "admin", "teacher", "student"]
     assert [e.value for e in AssignmentType] == ["code", "questionnaire"]
     assert [e.value for e in ReleasePolicyType] == ["immediate", "on_review"]
-    assert [e.value for e in SubmissionStatus] == ["draft", "pending", "awaiting_review", "published"]
+    assert [e.value for e in SubmissionStatus] == [
+        "draft",
+        "pending",
+        "awaiting_review",
+        "published",
+    ]
 
 
 def test_primary_keys():
@@ -54,12 +61,18 @@ def test_primary_keys():
 
     assert [c.name for c in tables["users"].primary_key.columns] == ["id"]
     assert [c.name for c in tables["organizations"].primary_key.columns] == ["id"]
-    assert sorted([c.name for c in tables["organization_members"].primary_key.columns]) == ["organization_id", "user_id"]
+    assert sorted(
+        [c.name for c in tables["organization_members"].primary_key.columns]
+    ) == ["organization_id", "user_id"]
     assert [c.name for c in tables["classrooms"].primary_key.columns] == ["id"]
-    assert sorted([c.name for c in tables["classroom_students"].primary_key.columns]) == ["classroom_id", "student_id"]
+    assert sorted(
+        [c.name for c in tables["classroom_students"].primary_key.columns]
+    ) == ["classroom_id", "student_id"]
     assert [c.name for c in tables["assignments"].primary_key.columns] == ["id"]
     assert [c.name for c in tables["submissions"].primary_key.columns] == ["id"]
-    assert [c.name for c in tables["submission_evaluations"].primary_key.columns] == ["id"]
+    assert [c.name for c in tables["submission_evaluations"].primary_key.columns] == [
+        "id"
+    ]
     assert [c.name for c in tables["classroom_messages"].primary_key.columns] == ["id"]
 
 
@@ -129,7 +142,9 @@ def test_unique_constraints():
 
     # submissions uq_assignment_student
     submission_unique_col_sets = [
-        {c.name for c in uc.columns} for uc in tables["submissions"].constraints if hasattr(uc, "columns") and uc.__class__.__name__ == "UniqueConstraint"
+        {c.name for c in uc.columns}
+        for uc in tables["submissions"].constraints
+        if hasattr(uc, "columns") and uc.__class__.__name__ == "UniqueConstraint"
     ]
     assert {"assignment_id", "student_id"} in submission_unique_col_sets
 
@@ -153,7 +168,9 @@ def test_indexes():
     assert "idx_classroom_students_student" in get_index_names("classroom_students")
     assert "idx_assignments_class" in get_index_names("assignments")
     assert "idx_submissions_assignment_status" in get_index_names("submissions")
-    assert "idx_classroom_messages_room_created" in get_index_names("classroom_messages")
+    assert "idx_classroom_messages_room_created" in get_index_names(
+        "classroom_messages"
+    )
     assert "idx_classroom_messages_sender" in get_index_names("classroom_messages")
 
     # Verify that all indexes compile to valid PostgreSQL syntax without double parentheses on columns
@@ -161,7 +178,9 @@ def test_indexes():
     for table in tables.values():
         for index in table.indexes:
             compiled = str(CreateIndex(index).compile(dialect=dialect))
-            assert "((" not in compiled, f"Index {index.name} has invalid expression nesting: {compiled}"
+            assert "((" not in compiled, (
+                f"Index {index.name} has invalid expression nesting: {compiled}"
+            )
 
 
 def test_model_relationships():
@@ -214,12 +233,16 @@ def test_model_relationships():
 
 def test_initial_migration_script():
     """Verify that Alembic initial migration script is syntactically valid and has upgrade/downgrade."""
-    versions_dir = Path(__file__).resolve().parent.parent.parent / "alembic" / "versions"
+    versions_dir = (
+        Path(__file__).resolve().parent.parent.parent / "alembic" / "versions"
+    )
     migration_files = list(versions_dir.glob("*_initial_schema.py"))
     assert migration_files, f"No initial migration file found in {versions_dir}"
     migration_path = migration_files[0]
-    
-    spec = importlib.util.spec_from_file_location("initial_schema_migration", migration_path)
+
+    spec = importlib.util.spec_from_file_location(
+        "initial_schema_migration", migration_path
+    )
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)

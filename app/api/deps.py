@@ -96,6 +96,7 @@ async def get_current_active_member(
 
 def require_roles(*allowed_roles: OrgRole) -> Callable[..., OrganizationMember]:
     """Dependência que exige um ou mais papéis RBAC específicos."""
+
     def role_checker(
         member: Annotated[OrganizationMember, Depends(get_current_active_member)],
     ) -> OrganizationMember:
@@ -122,13 +123,93 @@ async def verify_org_access(
     return member
 
 
+from dataclasses import dataclass
+
+from app.models.classroom import Classroom, ClassroomStudent
+
 require_owner = require_roles(OrgRole.OWNER)
 require_admin_or_owner = require_roles(OrgRole.OWNER, OrgRole.ADMIN)
 require_teacher = require_roles(OrgRole.TEACHER)
+require_teacher_admin_or_owner = require_roles(
+    OrgRole.OWNER, OrgRole.ADMIN, OrgRole.TEACHER
+)
+
+
+@dataclass
+class ClassroomContext:
+    classroom: Classroom
+    current_member: OrganizationMember
+    is_owner: bool
+    is_admin: bool
+    is_teacher_of_class: bool
+    is_enrolled_student: bool
+
+    @property
+    def can_manage_classroom(self) -> bool:
+        return self.is_owner or self.is_admin or self.is_teacher_of_class
+
+    @property
+    def can_manage_attachments(self) -> bool:
+        return self.is_owner or self.is_teacher_of_class
+
+    @property
+    def can_view(self) -> bool:
+        return self.can_manage_classroom or self.is_enrolled_student
+
+
+async def get_classroom_context(
+    classroom_id: UUID,
+    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ClassroomContext:
+    """Carrega a sala de aula e valida o isolamento de tenant e privilégios do membro."""
+    stmt = (
+        select(Classroom)
+        .options(selectinload(Classroom.teacher))
+        .where(Classroom.id == classroom_id)
+    )
+    result = await db.execute(stmt)
+    classroom = result.scalar_one_or_none()
+
+    if classroom is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sala de aula não encontrada.",
+        )
+
+    if classroom.organization_id != current_member.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso negado a recursos de outra organização.",
+        )
+
+    is_owner = current_member.role == OrgRole.OWNER
+    is_admin = current_member.role == OrgRole.ADMIN
+    is_teacher_of_class = classroom.teacher_id == current_member.user_id
+
+    # Checa se o usuário é aluno matriculado
+    enrolled_stmt = select(ClassroomStudent).where(
+        ClassroomStudent.classroom_id == classroom_id,
+        ClassroomStudent.student_id == current_member.user_id,
+    )
+    enrolled_res = await db.execute(enrolled_stmt)
+    is_enrolled_student = enrolled_res.scalar_one_or_none() is not None
+
+    return ClassroomContext(
+        classroom=classroom,
+        current_member=current_member,
+        is_owner=is_owner,
+        is_admin=is_admin,
+        is_teacher_of_class=is_teacher_of_class,
+        is_enrolled_student=is_enrolled_student,
+    )
+
 
 __all__ = [
     "AsyncGenerator",
     "AsyncSession",
+    "ClassroomContext",
+    "get_classroom_context",
     "get_current_active_member",
     "get_current_user",
     "get_db",
@@ -136,5 +217,6 @@ __all__ = [
     "require_owner",
     "require_roles",
     "require_teacher",
+    "require_teacher_admin_or_owner",
     "verify_org_access",
 ]

@@ -83,7 +83,9 @@ class Classroom(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Classroom id={self.id} name={self.name!r} org_id={self.organization_id}>"
+        return (
+            f"<Classroom id={self.id} name={self.name!r} org_id={self.organization_id}>"
+        )
 
 
 class ClassroomStudent(Base):
@@ -105,9 +107,7 @@ class ClassroomStudent(Base):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("idx_classroom_students_student", "student_id"),
-    )
+    __table_args__ = (Index("idx_classroom_students_student", "student_id"),)
 
     # Relationships
     classroom: Mapped[Classroom] = relationship(

@@ -32,7 +32,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 
-
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+extend-exclude = ["alembic"]
 
 [tool.mypy]
 python_version = "3.14"

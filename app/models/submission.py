@@ -58,7 +58,12 @@ class Submission(Base):
         default=None,
     )
     status: Mapped[SubmissionStatus] = mapped_column(
-        ENUM(SubmissionStatus, name="submission_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            SubmissionStatus,
+            name="submission_status",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         default=SubmissionStatus.PENDING,
         server_default=text("'pending'"),
         nullable=False,
@@ -71,7 +76,12 @@ class Submission(Base):
 
     __table_args__ = (
         UniqueConstraint("assignment_id", "student_id", name="uq_assignment_student"),
-        Index("idx_submissions_assignment_status", assignment_id, status, submitted_at.desc()),
+        Index(
+            "idx_submissions_assignment_status",
+            assignment_id,
+            status,
+            submitted_at.desc(),
+        ),
     )
 
     # Relationships

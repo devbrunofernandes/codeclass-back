@@ -14,11 +14,13 @@ from app.services.auth_service import auth_service
 @pytest.mark.asyncio
 async def test_register_organization_success(async_client: AsyncClient, monkeypatch):
     owner_id = uuid.uuid4()
-    mock_create = AsyncMock(return_value={
-        "id": owner_id,
-        "email": f"owner_{owner_id.hex[:6]}@example.com",
-        "full_name": "Org Owner",
-    })
+    mock_create = AsyncMock(
+        return_value={
+            "id": owner_id,
+            "email": f"owner_{owner_id.hex[:6]}@example.com",
+            "full_name": "Org Owner",
+        }
+    )
     monkeypatch.setattr(auth_service, "create_auth_user", mock_create)
 
     slug = f"univ-{owner_id.hex[:6]}"
@@ -42,15 +44,27 @@ async def test_register_organization_success(async_client: AsyncClient, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_register_organization_duplicate_slug(async_client: AsyncClient, monkeypatch):
+async def test_register_organization_duplicate_slug(
+    async_client: AsyncClient, monkeypatch
+):
     first_owner_id = uuid.uuid4()
     second_owner_id = uuid.uuid4()
     slug = f"dup-slug-{first_owner_id.hex[:6]}"
 
-    mock_create = AsyncMock(side_effect=[
-        {"id": first_owner_id, "email": f"user1_{first_owner_id.hex[:6]}@example.com", "full_name": "User 1"},
-        {"id": second_owner_id, "email": f"user2_{second_owner_id.hex[:6]}@example.com", "full_name": "User 2"},
-    ])
+    mock_create = AsyncMock(
+        side_effect=[
+            {
+                "id": first_owner_id,
+                "email": f"user1_{first_owner_id.hex[:6]}@example.com",
+                "full_name": "User 1",
+            },
+            {
+                "id": second_owner_id,
+                "email": f"user2_{second_owner_id.hex[:6]}@example.com",
+                "full_name": "User 2",
+            },
+        ]
+    )
     monkeypatch.setattr(auth_service, "create_auth_user", mock_create)
 
     payload1 = {
@@ -90,14 +104,20 @@ async def test_get_organization_and_tenant_isolation(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": org1_owner_id, "email": email1, "full_name": "Owner 1"}),
+        AsyncMock(
+            return_value={"id": org1_owner_id, "email": email1, "full_name": "Owner 1"}
+        ),
     )
     res1 = await async_client.post(
         "/api/v1/orgs",
         json={
             "name": "Org 1",
             "slug": slug1,
-            "owner": {"email": email1, "full_name": "Owner 1", "password": "password123"},
+            "owner": {
+                "email": email1,
+                "full_name": "Owner 1",
+                "password": "password123",
+            },
         },
     )
     assert res1.status_code == 201
@@ -110,14 +130,20 @@ async def test_get_organization_and_tenant_isolation(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": org2_owner_id, "email": email2, "full_name": "Owner 2"}),
+        AsyncMock(
+            return_value={"id": org2_owner_id, "email": email2, "full_name": "Owner 2"}
+        ),
     )
     res2 = await async_client.post(
         "/api/v1/orgs",
         json={
             "name": "Org 2",
             "slug": slug2,
-            "owner": {"email": email2, "full_name": "Owner 2", "password": "password123"},
+            "owner": {
+                "email": email2,
+                "full_name": "Owner 2",
+                "password": "password123",
+            },
         },
     )
     assert res2.status_code == 201
@@ -153,7 +179,10 @@ async def test_get_organization_and_tenant_isolation(
 
 @pytest.mark.asyncio
 async def test_update_and_delete_organization_owner(
-    async_client: AsyncClient, create_access_token, monkeypatch, db_session: AsyncSession
+    async_client: AsyncClient,
+    create_access_token,
+    monkeypatch,
+    db_session: AsyncSession,
 ):
     owner_id = uuid.uuid4()
     slug = f"org-up-{owner_id.hex[:6]}"
@@ -207,7 +236,10 @@ async def test_update_and_delete_organization_owner(
 
 @pytest.mark.asyncio
 async def test_delete_organization_deletes_all_members_and_users(
-    async_client: AsyncClient, create_access_token, monkeypatch, db_session: AsyncSession
+    async_client: AsyncClient,
+    create_access_token,
+    monkeypatch,
+    db_session: AsyncSession,
 ):
     owner_id = uuid.uuid4()
     teacher_id = uuid.uuid4()
@@ -218,7 +250,9 @@ async def test_delete_organization_deletes_all_members_and_users(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": owner_email, "full_name": "Owner"}),
+        AsyncMock(
+            return_value={"id": owner_id, "email": owner_email, "full_name": "Owner"}
+        ),
     )
 
     # 1. Cria organização
@@ -227,7 +261,11 @@ async def test_delete_organization_deletes_all_members_and_users(
         json={
             "name": "Org Multi Membros",
             "slug": org_slug,
-            "owner": {"email": owner_email, "full_name": "Owner", "password": "password123"},
+            "owner": {
+                "email": owner_email,
+                "full_name": "Owner",
+                "password": "password123",
+            },
         },
     )
     assert res.status_code == 201
@@ -238,7 +276,13 @@ async def test_delete_organization_deletes_all_members_and_users(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": teacher_id, "email": teacher_email, "full_name": "Teacher"}),
+        AsyncMock(
+            return_value={
+                "id": teacher_id,
+                "email": teacher_email,
+                "full_name": "Teacher",
+            }
+        ),
     )
     member_res = await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -302,4 +346,3 @@ async def test_list_organization_classrooms_admin_and_owner(
     )
     assert cls_res.status_code == 200
     assert isinstance(cls_res.json(), list)
-

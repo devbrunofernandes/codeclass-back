@@ -10,7 +10,9 @@ from app.services.auth_service import auth_service
 
 
 @pytest.fixture
-async def setup_user_and_org(async_client: AsyncClient, create_access_token, monkeypatch):
+async def setup_user_and_org(
+    async_client: AsyncClient, create_access_token, monkeypatch
+):
     owner_id = uuid.uuid4()
     slug = f"org-users-{owner_id.hex[:6]}"
     email = f"user_owner_{owner_id.hex[:6]}@example.com"
@@ -19,7 +21,9 @@ async def setup_user_and_org(async_client: AsyncClient, create_access_token, mon
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": full_name}),
+        AsyncMock(
+            return_value={"id": owner_id, "email": email, "full_name": full_name}
+        ),
     )
 
     res = await async_client.post(
@@ -27,7 +31,11 @@ async def setup_user_and_org(async_client: AsyncClient, create_access_token, mon
         json={
             "name": "Org Users Test",
             "slug": slug,
-            "owner": {"email": email, "full_name": full_name, "password": "password123"},
+            "owner": {
+                "email": email,
+                "full_name": full_name,
+                "password": "password123",
+            },
         },
     )
     assert res.status_code == 201
@@ -44,7 +52,9 @@ async def setup_user_and_org(async_client: AsyncClient, create_access_token, mon
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_full_name(async_client: AsyncClient, setup_user_and_org, monkeypatch):
+async def test_update_users_me_full_name(
+    async_client: AsyncClient, setup_user_and_org, monkeypatch
+):
     user_data = setup_user_and_org
     token = user_data["token"]
 
@@ -73,7 +83,9 @@ async def test_update_users_me_full_name(async_client: AsyncClient, setup_user_a
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_name_validation_errors(async_client: AsyncClient, setup_user_and_org):
+async def test_update_users_me_name_validation_errors(
+    async_client: AsyncClient, setup_user_and_org
+):
     user_data = setup_user_and_org
     token = user_data["token"]
 
@@ -95,7 +107,9 @@ async def test_update_users_me_name_validation_errors(async_client: AsyncClient,
 
 
 @pytest.mark.asyncio
-async def test_change_password_success(async_client: AsyncClient, setup_user_and_org, monkeypatch):
+async def test_change_password_success(
+    async_client: AsyncClient, setup_user_and_org, monkeypatch
+):
     user_data = setup_user_and_org
     token = user_data["token"]
 
@@ -121,7 +135,9 @@ async def test_change_password_success(async_client: AsyncClient, setup_user_and
 
 
 @pytest.mark.asyncio
-async def test_change_password_validation_error(async_client: AsyncClient, setup_user_and_org):
+async def test_change_password_validation_error(
+    async_client: AsyncClient, setup_user_and_org
+):
     user_data = setup_user_and_org
     token = user_data["token"]
 
@@ -166,7 +182,13 @@ async def test_change_password_deactivated_user(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": student_id, "email": student_email, "full_name": student_name}),
+        AsyncMock(
+            return_value={
+                "id": student_id,
+                "email": student_email,
+                "full_name": student_name,
+            }
+        ),
     )
 
     # 1. Cadastra aluno
@@ -219,7 +241,13 @@ async def test_get_user_by_id_same_org(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": student_id, "email": student_email, "full_name": student_name}),
+        AsyncMock(
+            return_value={
+                "id": student_id,
+                "email": student_email,
+                "full_name": student_name,
+            }
+        ),
     )
 
     # Cadastra o estudante na organização
@@ -265,14 +293,24 @@ async def test_get_user_by_id_cross_tenant_isolation_returns_404(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": org2_owner_id, "email": org2_email, "full_name": "Other Owner"}),
+        AsyncMock(
+            return_value={
+                "id": org2_owner_id,
+                "email": org2_email,
+                "full_name": "Other Owner",
+            }
+        ),
     )
     res_org2 = await async_client.post(
         "/api/v1/orgs",
         json={
             "name": "Org Isolada 2",
             "slug": f"org-isolada-{org2_owner_id.hex[:6]}",
-            "owner": {"email": org2_email, "full_name": "Other Owner", "password": "password123"},
+            "owner": {
+                "email": org2_email,
+                "full_name": "Other Owner",
+                "password": "password123",
+            },
         },
     )
     assert res_org2.status_code == 201

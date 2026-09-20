@@ -37,11 +37,21 @@ class Assignment(Base):
         nullable=False,
     )
     type: Mapped[AssignmentType] = mapped_column(
-        ENUM(AssignmentType, name="assignment_type", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            AssignmentType,
+            name="assignment_type",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
     )
     release_policy: Mapped[ReleasePolicyType] = mapped_column(
-        ENUM(ReleasePolicyType, name="release_policy_type", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            ReleasePolicyType,
+            name="release_policy_type",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         default=ReleasePolicyType.ON_REVIEW,
         server_default=text("'on_review'"),
         nullable=False,
@@ -62,9 +72,7 @@ class Assignment(Base):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("idx_assignments_class", "classroom_id"),
-    )
+    __table_args__ = (Index("idx_assignments_class", "classroom_id"),)
 
     # Relationships
     classroom: Mapped[Classroom] = relationship(

@@ -32,4 +32,3 @@ async def root() -> dict[str, str]:
         "docs": "/docs",
         "health": f"{settings.API_V1_STR}/health",
     }
-

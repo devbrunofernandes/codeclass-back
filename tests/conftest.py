@@ -45,7 +45,10 @@ def create_access_token():
             "iat": int(now.timestamp()),
             "exp": int(expire.timestamp()),
         }
-        secret = settings.SUPABASE_JWT_SECRET or "super-secret-jwt-token-with-at-least-32-characters-long"
+        secret = (
+            settings.SUPABASE_JWT_SECRET
+            or "super-secret-jwt-token-with-at-least-32-characters-long"
+        )
         return jwt.encode(payload, secret, algorithm="HS256")
 
     return _create_token

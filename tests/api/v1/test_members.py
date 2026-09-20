@@ -9,14 +9,18 @@ from app.services.auth_service import auth_service
 
 
 @pytest.fixture
-async def setup_org_and_owner(async_client: AsyncClient, create_access_token, monkeypatch):
+async def setup_org_and_owner(
+    async_client: AsyncClient, create_access_token, monkeypatch
+):
     owner_id = uuid.uuid4()
     slug = f"org-members-{owner_id.hex[:6]}"
     email = f"owner_{owner_id.hex[:6]}@example.com"
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Org Owner"}),
+        AsyncMock(
+            return_value={"id": owner_id, "email": email, "full_name": "Org Owner"}
+        ),
     )
 
     res = await async_client.post(
@@ -24,13 +28,22 @@ async def setup_org_and_owner(async_client: AsyncClient, create_access_token, mo
         json={
             "name": "Org Membros Teste",
             "slug": slug,
-            "owner": {"email": email, "full_name": "Org Owner", "password": "password123"},
+            "owner": {
+                "email": email,
+                "full_name": "Org Owner",
+                "password": "password123",
+            },
         },
     )
     assert res.status_code == 201
     org_id = res.json()["id"]
     token = create_access_token(owner_id, email=email, full_name="Org Owner")
-    return {"org_id": org_id, "owner_id": owner_id, "owner_token": token, "email": email}
+    return {
+        "org_id": org_id,
+        "owner_id": owner_id,
+        "owner_token": token,
+        "email": email,
+    }
 
 
 @pytest.mark.asyncio
@@ -47,7 +60,13 @@ async def test_member_registration_and_rbac(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": admin_id, "email": admin_email, "full_name": "Admin User"}),
+        AsyncMock(
+            return_value={
+                "id": admin_id,
+                "email": admin_email,
+                "full_name": "Admin User",
+            }
+        ),
     )
     res_admin = await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -61,7 +80,9 @@ async def test_member_registration_and_rbac(
     )
     assert res_admin.status_code == 201
     assert res_admin.json()["role"] == OrgRole.ADMIN.value
-    admin_token = create_access_token(admin_id, email=admin_email, full_name="Admin User")
+    admin_token = create_access_token(
+        admin_id, email=admin_email, full_name="Admin User"
+    )
 
     # 2. Admin tenta cadastrar outro Admin (Bloqueio 403 - Apenas Owner pode criar Admins)
     sub_admin_id = uuid.uuid4()
@@ -83,7 +104,13 @@ async def test_member_registration_and_rbac(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": teacher_id, "email": teacher_email, "full_name": "Teacher User"}),
+        AsyncMock(
+            return_value={
+                "id": teacher_id,
+                "email": teacher_email,
+                "full_name": "Teacher User",
+            }
+        ),
     )
     res_teacher = await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -96,7 +123,9 @@ async def test_member_registration_and_rbac(
         },
     )
     assert res_teacher.status_code == 201
-    teacher_token = create_access_token(teacher_id, email=teacher_email, full_name="Teacher User")
+    teacher_token = create_access_token(
+        teacher_id, email=teacher_email, full_name="Teacher User"
+    )
 
     # 4. Professor tenta cadastrar Aluno (Bloqueio 403 - Apenas Owner ou Admin podem cadastrar membros)
     student_id = uuid.uuid4()
@@ -146,7 +175,13 @@ async def test_update_member_role_and_status(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": student_id, "email": student_email, "full_name": "Student User"}),
+        AsyncMock(
+            return_value={
+                "id": student_id,
+                "email": student_email,
+                "full_name": "Student User",
+            }
+        ),
     )
     await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -178,7 +213,9 @@ async def test_update_member_role_and_status(
     assert patch_status.json()["is_active"] is False
 
     # Desativado tenta acessar recursos da org -> 403
-    inactive_token = create_access_token(student_id, email=student_email, full_name="Student User")
+    inactive_token = create_access_token(
+        student_id, email=student_email, full_name="Student User"
+    )
     access_res = await async_client.get(
         f"/api/v1/orgs/{org_id}/members",
         headers={"Authorization": f"Bearer {inactive_token}"},
@@ -201,7 +238,13 @@ async def test_transfer_ownership(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": new_owner_id, "email": new_owner_email, "full_name": "Novo Dono"}),
+        AsyncMock(
+            return_value={
+                "id": new_owner_id,
+                "email": new_owner_email,
+                "full_name": "Novo Dono",
+            }
+        ),
     )
     await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -224,7 +267,9 @@ async def test_transfer_ownership(
     assert transfer_res.json()["owner_id"] == str(new_owner_id)
 
     # Verifica lista de membros: antigo dono deve ser admin, novo dono deve ser owner
-    new_owner_token = create_access_token(new_owner_id, email=new_owner_email, full_name="Novo Dono")
+    new_owner_token = create_access_token(
+        new_owner_id, email=new_owner_email, full_name="Novo Dono"
+    )
     members_res = await async_client.get(
         f"/api/v1/orgs/{org_id}/members",
         headers={"Authorization": f"Bearer {new_owner_token}"},
@@ -258,7 +303,9 @@ async def test_prevent_self_and_owner_deactivation(
     monkeypatch.setattr(
         auth_service,
         "create_auth_user",
-        AsyncMock(return_value={"id": admin_id, "email": admin_email, "full_name": "Admin"}),
+        AsyncMock(
+            return_value={"id": admin_id, "email": admin_email, "full_name": "Admin"}
+        ),
     )
     await async_client.post(
         f"/api/v1/orgs/{org_id}/members",
@@ -280,4 +327,3 @@ async def test_prevent_self_and_owner_deactivation(
     )
     assert res_owner_deact.status_code == 400
     assert "proprietário" in res_owner_deact.json()["detail"].lower()
-
