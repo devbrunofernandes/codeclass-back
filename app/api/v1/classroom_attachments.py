@@ -1,13 +1,14 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Response, UploadFile, status
 
 from app.api.deps import ClassroomContext, get_classroom_context
+from app.core.exceptions import ForbiddenException
 from app.schemas.classroom import (
     ClassroomAttachmentDownloadResponse,
     ClassroomAttachmentResponse,
 )
-from app.services.storage_service import StorageError, storage_service
+from app.services.storage_service import storage_service
 
 router = APIRouter()
 
@@ -23,19 +24,15 @@ async def upload_attachment(
     context: Annotated[ClassroomContext, Depends(get_classroom_context)],
 ) -> ClassroomAttachmentResponse:
     if not context.can_manage_attachments:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: apenas o professor responsável pela sala ou owner podem anexar materiais didáticos.",
+        raise ForbiddenException(
+            "Acesso negado: apenas o professor responsável pela sala ou owner podem anexar materiais didáticos."
         )
 
-    try:
-        data = await storage_service.upload_classroom_material(
-            organization_id=context.classroom.organization_id,
-            classroom_id=context.classroom.id,
-            file=file,
-        )
-    except StorageError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    data = await storage_service.upload_classroom_material(
+        organization_id=context.classroom.organization_id,
+        classroom_id=context.classroom.id,
+        file=file,
+    )
 
     return ClassroomAttachmentResponse(
         file_name=data["file_name"],
@@ -54,18 +51,12 @@ async def list_attachments(
     context: Annotated[ClassroomContext, Depends(get_classroom_context)],
 ) -> list[ClassroomAttachmentResponse]:
     if not context.can_view:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: você não é membro desta sala.",
-        )
+        raise ForbiddenException("Acesso negado: você não é membro desta sala.")
 
-    try:
-        files = await storage_service.list_classroom_materials(
-            organization_id=context.classroom.organization_id,
-            classroom_id=context.classroom.id,
-        )
-    except StorageError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    files = await storage_service.list_classroom_materials(
+        organization_id=context.classroom.organization_id,
+        classroom_id=context.classroom.id,
+    )
 
     return [
         ClassroomAttachmentResponse(
@@ -89,20 +80,14 @@ async def get_attachment_download_url(
     context: Annotated[ClassroomContext, Depends(get_classroom_context)],
 ) -> ClassroomAttachmentDownloadResponse:
     if not context.can_view:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: você não é membro desta sala.",
-        )
+        raise ForbiddenException("Acesso negado: você não é membro desta sala.")
 
-    try:
-        download_url = await storage_service.create_signed_download_url(
-            organization_id=context.classroom.organization_id,
-            classroom_id=context.classroom.id,
-            file_name=file_name,
-            expires_in=3600,
-        )
-    except StorageError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    download_url = await storage_service.create_signed_download_url(
+        organization_id=context.classroom.organization_id,
+        classroom_id=context.classroom.id,
+        file_name=file_name,
+        expires_in=3600,
+    )
 
     return ClassroomAttachmentDownloadResponse(
         file_name=file_name,
@@ -121,18 +106,14 @@ async def delete_attachment(
     context: Annotated[ClassroomContext, Depends(get_classroom_context)],
 ) -> Response:
     if not context.can_manage_attachments:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: apenas o professor responsável pela sala ou owner podem remover materiais didáticos.",
+        raise ForbiddenException(
+            "Acesso negado: apenas o professor responsável pela sala ou owner podem remover materiais didáticos."
         )
 
-    try:
-        await storage_service.delete_classroom_material(
-            organization_id=context.classroom.organization_id,
-            classroom_id=context.classroom.id,
-            file_name=file_name,
-        )
-    except StorageError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    await storage_service.delete_classroom_material(
+        organization_id=context.classroom.organization_id,
+        classroom_id=context.classroom.id,
+        file_name=file_name,
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -2,11 +2,17 @@ import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import (
+    AppException,
+    AuthError,
+    BadRequestException,
+    ConflictException,
+    NotFoundException,
+)
 from app.models.enums import OrgRole
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
@@ -16,7 +22,7 @@ from app.schemas.organization import (
     OrganizationUpdateRequest,
     TransferOwnershipRequest,
 )
-from app.services.auth_service import AuthError, auth_service
+from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,30 +38,21 @@ class OrganizationService:
             select(Organization).where(Organization.slug == request.slug)
         )
         if slug_res.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe uma organização com este slug.",
-            )
+            raise ConflictException("Já existe uma organização com este slug.")
 
         # Verifica duplicidade de email
         email_res = await db.execute(
             select(User).where(User.email == request.owner.email)
         )
         if email_res.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe um usuário cadastrado com este e-mail.",
-            )
+            raise ConflictException("Já existe um usuário cadastrado com este e-mail.")
 
-        # 1. Cria usuário no provedor de autenticação
-        try:
-            auth_user = await auth_service.create_auth_user(
-                email=request.owner.email,
-                password=request.owner.password,
-                full_name=request.owner.full_name,
-            )
-        except AuthError as e:
-            raise HTTPException(status_code=e.status_code, detail=e.message) from e
+        # 1. Cria usuário no provedor de autenticação (AuthError sobe como AppException)
+        auth_user = await auth_service.create_auth_user(
+            email=request.owner.email,
+            password=request.owner.password,
+            full_name=request.owner.full_name,
+        )
 
         user_id = auth_user["id"]
 
@@ -99,9 +96,8 @@ class OrganizationService:
                     "Falha ao remover usuário do provedor no rollback: %s",
                     cleanup_err,
                 )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Organização com este slug ou usuário com este e-mail já existe.",
+            raise ConflictException(
+                "Organização com este slug ou usuário com este e-mail já existe."
             ) from e
         except Exception as e:
             await db.rollback()
@@ -112,9 +108,9 @@ class OrganizationService:
                     "Falha ao remover usuário do provedor no rollback: %s",
                     cleanup_err,
                 )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Erro ao cadastrar organização: {e!s}",
+            raise AppException(
+                message=f"Erro ao cadastrar organização: {e!s}",
+                status_code=500,
             ) from e
 
     async def get_organization(
@@ -125,10 +121,7 @@ class OrganizationService:
         res = await db.execute(select(Organization).where(Organization.id == org_id))
         org = res.scalar_one_or_none()
         if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organização não encontrada.",
-            )
+            raise NotFoundException("Organização não encontrada.")
         return OrganizationResponse.model_validate(org)
 
     async def update_organization(
@@ -140,10 +133,7 @@ class OrganizationService:
         res = await db.execute(select(Organization).where(Organization.id == org_id))
         org = res.scalar_one_or_none()
         if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organização não encontrada.",
-            )
+            raise NotFoundException("Organização não encontrada.")
 
         if request.slug is not None and request.slug != org.slug:
             slug_check = await db.execute(
@@ -152,9 +142,8 @@ class OrganizationService:
                 )
             )
             if slug_check.scalar_one_or_none() is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Este slug já está em uso por outra organização.",
+                raise ConflictException(
+                    "Este slug já está em uso por outra organização."
                 )
             org.slug = request.slug
 
@@ -166,9 +155,8 @@ class OrganizationService:
             await db.refresh(org)
         except IntegrityError as e:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Este slug já está em uso por outra organização.",
+            raise ConflictException(
+                "Este slug já está em uso por outra organização."
             ) from e
 
         return OrganizationResponse.model_validate(org)
@@ -181,10 +169,7 @@ class OrganizationService:
         res = await db.execute(select(Organization).where(Organization.id == org_id))
         org = res.scalar_one_or_none()
         if org is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organização não encontrada.",
-            )
+            raise NotFoundException("Organização não encontrada.")
 
         # 1. Coleta os user_id de todos os membros da organização (incluindo o owner)
         members_res = await db.execute(
@@ -225,9 +210,8 @@ class OrganizationService:
         db: AsyncSession,
     ) -> OrganizationResponse:
         if request.new_owner_id == current_member.user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="O usuário indicado já é o proprietário da organização.",
+            raise BadRequestException(
+                "O usuário indicado já é o proprietário da organização."
             )
 
         # Verifica se o novo proprietário é membro ativo da organização
@@ -239,15 +223,13 @@ class OrganizationService:
         new_owner_member = res.scalar_one_or_none()
 
         if new_owner_member is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="O novo proprietário deve ser um membro vinculado a esta organização.",
+            raise NotFoundException(
+                "O novo proprietário deve ser um membro vinculado a esta organização."
             )
 
         if not new_owner_member.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Não é possível transferir a posse para um membro desativado.",
+            raise BadRequestException(
+                "Não é possível transferir a posse para um membro desativado."
             )
 
         # Busca organização
@@ -256,10 +238,7 @@ class OrganizationService:
         )
         organization = org_res.scalar_one_or_none()
         if organization is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organização não encontrada.",
-            )
+            raise NotFoundException("Organização não encontrada.")
 
         # Transfere posse:
         # 1. Atualiza antigo owner para admin (HLD linha 85)

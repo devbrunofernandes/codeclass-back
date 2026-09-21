@@ -1,14 +1,14 @@
 import logging
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import AppException, AuthError, NotFoundException
 from app.models.organization import OrganizationMember
 from app.models.user import User
-from app.services.auth_service import AuthError, auth_service
+from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,10 @@ class UserService:
         user_id = user.id
         old_full_name = user.full_name
 
-        try:
-            await auth_service.update_auth_user(
-                user_id=user_id,
-                full_name=full_name,
-            )
-        except AuthError as e:
-            raise HTTPException(status_code=e.status_code, detail=e.message) from e
+        await auth_service.update_auth_user(
+            user_id=user_id,
+            full_name=full_name,
+        )
 
         user.full_name = full_name
         try:
@@ -51,9 +48,9 @@ class UserService:
                     user_id,
                     cleanup_err,
                 )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Erro ao atualizar usuário no banco de dados: {e!s}",
+            raise AppException(
+                message=f"Erro ao atualizar usuário no banco de dados: {e!s}",
+                status_code=500,
             ) from e
 
     async def change_password(
@@ -61,13 +58,10 @@ class UserService:
         user_id: UUID,
         password: str,
     ) -> None:
-        try:
-            await auth_service.update_auth_user(
-                user_id=user_id,
-                password=password,
-            )
-        except AuthError as e:
-            raise HTTPException(status_code=e.status_code, detail=e.message) from e
+        await auth_service.update_auth_user(
+            user_id=user_id,
+            password=password,
+        )
 
     async def get_user_in_org(
         self,
@@ -87,10 +81,7 @@ class UserService:
         member = result.scalar_one_or_none()
 
         if member is None or member.user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Usuário não encontrado na organização.",
-            )
+            raise NotFoundException("Usuário não encontrado na organização.")
 
         return member
 

@@ -6,14 +6,8 @@ from jose import JWTError, jwt
 from supabase_auth.types import AdminUserAttributes
 
 from app.core.config import settings
+from app.core.exceptions import AuthError
 from supabase import Client, ClientOptions, create_client
-
-
-class AuthError(Exception):
-    def __init__(self, message: str, status_code: int = 400):
-        self.message = message
-        self.status_code = status_code
-        super().__init__(message)
 
 
 class AuthService:

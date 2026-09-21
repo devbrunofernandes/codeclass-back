@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -11,6 +11,7 @@ from app.api.deps import (
     get_db,
 )
 from app.api.v1 import classroom_attachments
+from app.core.exceptions import ForbiddenException
 from app.models.organization import OrganizationMember
 from app.schemas.classroom import (
     ClassroomDetailResponse,
@@ -52,9 +53,8 @@ async def get_classroom_details(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomDetailResponse:
     if not context.can_view:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: você não é membro nem responsável por esta sala de aula.",
+        raise ForbiddenException(
+            "Acesso negado: você não é membro nem responsável por esta sala de aula."
         )
 
     return await classroom_service.get_classroom_details(context.classroom, db)
@@ -71,9 +71,8 @@ async def update_classroom(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomResponse:
     if not context.can_manage_classroom:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: apenas o professor responsável, administradores ou owner podem alterar esta sala.",
+        raise ForbiddenException(
+            "Acesso negado: apenas o professor responsável, administradores ou owner podem alterar esta sala."
         )
 
     updated = await classroom_service.update_classroom(
@@ -92,9 +91,8 @@ async def delete_classroom(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     if not context.can_manage_classroom:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: permissão insuficiente para excluir esta sala de aula.",
+        raise ForbiddenException(
+            "Acesso negado: permissão insuficiente para excluir esta sala de aula."
         )
 
     await classroom_service.delete_classroom(context.classroom, db)
@@ -116,9 +114,8 @@ async def enroll_student(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomStudentMemberResponse:
     if not context.can_manage_classroom:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: apenas o professor responsável ou coordenação podem matricular alunos.",
+        raise ForbiddenException(
+            "Acesso negado: apenas o professor responsável ou coordenação podem matricular alunos."
         )
 
     return await classroom_service.enroll_student(
@@ -137,9 +134,8 @@ async def unenroll_student(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     if not context.can_manage_classroom:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: permissão insuficiente para desmatricular alunos desta sala.",
+        raise ForbiddenException(
+            "Acesso negado: permissão insuficiente para desmatricular alunos desta sala."
         )
 
     await classroom_service.unenroll_student(context.classroom.id, student_id, db)
@@ -162,9 +158,8 @@ async def list_classroom_members(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomMembersResponse:
     if not context.can_view:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso negado: você não possui permissão para visualizar os membros desta sala.",
+        raise ForbiddenException(
+            "Acesso negado: você não possui permissão para visualizar os membros desta sala."
         )
 
     return await classroom_service.list_classroom_members(context.classroom, db)

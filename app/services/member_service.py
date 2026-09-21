@@ -1,12 +1,19 @@
 import logging
 from uuid import UUID
 
-from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import (
+    AppException,
+    AuthError,
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
 from app.models.user import User
@@ -16,7 +23,7 @@ from app.schemas.organization import (
     OrganizationMemberCreate,
     OrganizationMemberResponse,
 )
-from app.services.auth_service import AuthError, auth_service
+from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,35 +38,27 @@ class MemberService:
     ) -> OrganizationMemberResponse:
         # Não permite criar outro Owner diretamente
         if request.role == OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Não é permitido criar um membro diretamente com papel de proprietário.",
+            raise BadRequestException(
+                "Não é permitido criar um membro diretamente com papel de proprietário."
             )
 
         # Regra RBAC: Apenas o Owner pode cadastrar Administradores (HLD matriz RBAC)
         if request.role == OrgRole.ADMIN and current_member.role != OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Apenas o proprietário (Owner) pode cadastrar novos administradores.",
+            raise ForbiddenException(
+                "Apenas o proprietário (Owner) pode cadastrar novos administradores."
             )
 
         # Verifica se e-mail já existe
         email_res = await db.execute(select(User).where(User.email == request.email))
         if email_res.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe um usuário com este e-mail cadastrado.",
-            )
+            raise ConflictException("Já existe um usuário com este e-mail cadastrado.")
 
-        # 1. Cria usuário no provedor de autenticação
-        try:
-            auth_user = await auth_service.create_auth_user(
-                email=request.email,
-                password=request.password,
-                full_name=request.full_name,
-            )
-        except AuthError as e:
-            raise HTTPException(status_code=e.status_code, detail=e.message) from e
+        # 1. Cria usuário no provedor de autenticação (AuthError sobe como AppException)
+        auth_user = await auth_service.create_auth_user(
+            email=request.email,
+            password=request.password,
+            full_name=request.full_name,
+        )
 
         user_id = auth_user["id"]
 
@@ -78,33 +77,23 @@ class MemberService:
                 organization_id=org_id,
                 user_id=new_user.id,
                 role=request.role,
-                is_active=True,
             )
             db.add(new_member)
             await db.commit()
             await db.refresh(new_member)
-
-            return OrganizationMemberResponse(
-                organization_id=new_member.organization_id,
-                user_id=new_user.id,
-                email=new_user.email,
-                full_name=new_user.full_name,
-                role=new_member.role,
-                is_active=new_member.is_active,
-                joined_at=new_member.joined_at,
-            )
         except IntegrityError as e:
             await db.rollback()
+            # Rollback compensatório no Supabase Auth
             try:
                 await auth_service.delete_auth_user(user_id)
             except AuthError as cleanup_err:
                 logger.warning(
-                    "Falha ao remover usuário do provedor no rollback de membro: %s",
+                    "Falha ao reverter usuário %s no auth provider: %s",
+                    user_id,
                     cleanup_err,
                 )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Membro com este e-mail já cadastrado.",
+            raise ConflictException(
+                "Conflito ao registrar membro na organização."
             ) from e
         except Exception as e:
             await db.rollback()
@@ -112,23 +101,34 @@ class MemberService:
                 await auth_service.delete_auth_user(user_id)
             except AuthError as cleanup_err:
                 logger.warning(
-                    "Falha ao remover usuário do provedor no rollback de membro: %s",
+                    "Falha ao reverter usuário %s no auth provider: %s",
+                    user_id,
                     cleanup_err,
                 )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Erro ao cadastrar membro: {e!s}",
+            raise AppException(
+                message=f"Erro interno ao criar membro: {e!s}",
+                status_code=500,
             ) from e
+
+        return OrganizationMemberResponse(
+            organization_id=new_member.organization_id,
+            user_id=new_user.id,
+            email=new_user.email,
+            full_name=new_user.full_name,
+            role=new_member.role,
+            is_active=new_member.is_active,
+            joined_at=new_member.joined_at,
+        )
 
     async def list_members(
         self,
         org_id: UUID,
+        role: OrgRole | None,
+        is_active: bool | None,
+        search: str | None,
+        offset: int,
+        limit: int,
         db: AsyncSession,
-        role: OrgRole | None = None,
-        is_active: bool | None = None,
-        search: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
     ) -> list[OrganizationMemberResponse]:
         stmt = (
             select(OrganizationMember)
@@ -141,19 +141,15 @@ class MemberService:
         if is_active is not None:
             stmt = stmt.where(OrganizationMember.is_active == is_active)
         if search:
-            search_filter = f"%{search.lower()}%"
+            search_pattern = f"%{search}%"
             stmt = stmt.join(OrganizationMember.user).where(
                 or_(
-                    func.lower(User.full_name).like(search_filter),
-                    func.lower(User.email).like(search_filter),
+                    User.full_name.ilike(search_pattern),
+                    User.email.ilike(search_pattern),
                 )
             )
 
-        stmt = (
-            stmt.order_by(OrganizationMember.joined_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = stmt.offset(offset).limit(limit)
         result = await db.execute(stmt)
         members = result.scalars().all()
 
@@ -179,16 +175,14 @@ class MemberService:
         db: AsyncSession,
     ) -> OrganizationMemberResponse:
         if request.role == OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Para transferir a posse da organização, utilize o endpoint de transferência de titularidade.",
+            raise BadRequestException(
+                "Para transferir a posse da organização, utilize o endpoint de transferência de titularidade."
             )
 
         # RBAC: apenas o Owner pode alterar papéis para/de Admin
         if request.role == OrgRole.ADMIN and current_member.role != OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Apenas o proprietário (Owner) pode promover membros para administrador.",
+            raise ForbiddenException(
+                "Apenas o proprietário (Owner) pode promover membros para administrador."
             )
 
         stmt = (
@@ -203,21 +197,16 @@ class MemberService:
         target_member = result.scalar_one_or_none()
 
         if target_member is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Membro não encontrado nesta organização.",
-            )
+            raise NotFoundException("Membro não encontrado nesta organização.")
 
         if target_member.role == OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="O papel do proprietário não pode ser modificado por esta rota.",
+            raise BadRequestException(
+                "O papel do proprietário não pode ser modificado por esta rota."
             )
 
         if target_member.role == OrgRole.ADMIN and current_member.role != OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Apenas o proprietário (Owner) pode rebaixar administradores.",
+            raise ForbiddenException(
+                "Apenas o proprietário (Owner) pode rebaixar administradores."
             )
 
         target_member.role = request.role
@@ -243,9 +232,8 @@ class MemberService:
         db: AsyncSession,
     ) -> OrganizationMemberResponse:
         if current_member.user_id == user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Não é permitido alterar o próprio status de ativação.",
+            raise BadRequestException(
+                "Não é permitido alterar o próprio status de ativação."
             )
 
         stmt = (
@@ -260,22 +248,17 @@ class MemberService:
         target_member = result.scalar_one_or_none()
 
         if target_member is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Membro não encontrado nesta organização.",
-            )
+            raise NotFoundException("Membro não encontrado nesta organização.")
 
         if target_member.role == OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Não é permitido desativar o proprietário da organização.",
+            raise BadRequestException(
+                "Não é permitido desativar o proprietário da organização."
             )
 
         # Admin não pode desativar outro admin nem o owner
         if target_member.role == OrgRole.ADMIN and current_member.role != OrgRole.OWNER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Apenas o proprietário pode desativar administradores.",
+            raise ForbiddenException(
+                "Apenas o proprietário pode desativar administradores."
             )
 
         target_member.is_active = request.is_active

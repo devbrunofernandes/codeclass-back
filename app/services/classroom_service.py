@@ -2,12 +2,16 @@ from collections.abc import Callable, Coroutine
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import (
+    BadRequestException,
+    ConflictException,
+    NotFoundException,
+)
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
@@ -153,23 +157,20 @@ class ClassroomService:
                 target_member = (await db.execute(stmt)).scalar_one_or_none()
 
                 if target_member is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="O professor indicado não pertence a esta organização.",
+                    raise NotFoundException(
+                        "O professor indicado não pertence a esta organização."
                     )
                 if not target_member.is_active:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="O professor indicado está inativo nesta organização.",
+                    raise BadRequestException(
+                        "O professor indicado está inativo nesta organização."
                     )
                 if target_member.role not in (
                     OrgRole.TEACHER,
                     OrgRole.ADMIN,
                     OrgRole.OWNER,
                 ):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="O usuário indicado deve possuir papel docente ou administrativo.",
+                    raise BadRequestException(
+                        "O usuário indicado deve possuir papel docente ou administrativo."
                     )
                 assigned_teacher_id = teacher_id
             else:
@@ -254,21 +255,18 @@ class ClassroomService:
         student_member = (await db.execute(member_stmt)).scalar_one_or_none()
 
         if student_member is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="O usuário indicado não pertence a esta organização.",
+            raise BadRequestException(
+                "O usuário indicado não pertence a esta organização."
             )
 
         if not student_member.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Não é possível matricular um usuário desativado na organização.",
+            raise BadRequestException(
+                "Não é possível matricular um usuário desativado na organização."
             )
 
         if student_member.role != OrgRole.STUDENT:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Apenas membros com papel de estudante podem ser matriculados na turma.",
+            raise BadRequestException(
+                "Apenas membros com papel de estudante podem ser matriculados na turma."
             )
 
         # Checagem preliminar de duplicidade
@@ -277,10 +275,7 @@ class ClassroomService:
             ClassroomStudent.student_id == student_id,
         )
         if (await db.execute(enrolled_stmt)).scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="O estudante já está matriculado nesta turma.",
-            )
+            raise ConflictException("O estudante já está matriculado nesta turma.")
 
         new_enrollment = ClassroomStudent(
             classroom_id=classroom.id,
@@ -292,10 +287,7 @@ class ClassroomService:
             await db.refresh(new_enrollment)
         except IntegrityError:
             await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="O estudante já está matriculado nesta turma.",
-            )
+            raise ConflictException("O estudante já está matriculado nesta turma.")
 
         return ClassroomStudentMemberResponse(
             student_id=student_member.user.id,
@@ -315,10 +307,7 @@ class ClassroomService:
         enrollment = (await db.execute(enrolled_stmt)).scalar_one_or_none()
 
         if enrollment is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="O estudante não está matriculado nesta turma.",
-            )
+            raise NotFoundException("O estudante não está matriculado nesta turma.")
 
         await db.delete(enrollment)
         await db.commit()

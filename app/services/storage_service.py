@@ -7,19 +7,13 @@ import anyio
 from fastapi import UploadFile
 
 from app.core.config import settings
+from app.core.exceptions import StorageError
 from supabase import Client, ClientOptions, create_client
 
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB conforme HLD (RF23)
 CLASSROOM_MATERIALS_BUCKET = "classroom-materials"
-
-
-class StorageError(Exception):
-    def __init__(self, message: str, status_code: int = 400) -> None:
-        self.message = message
-        self.status_code = status_code
-        super().__init__(message)
 
 
 class StorageService:

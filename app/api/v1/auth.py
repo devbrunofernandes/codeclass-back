@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_member, get_current_user, get_db
+from app.core.exceptions import ForbiddenException
 from app.models.organization import OrganizationMember
 from app.models.user import User
 from app.schemas.user import (
@@ -15,7 +16,7 @@ from app.schemas.user import (
     UserLoginRequest,
     UserResponse,
 )
-from app.services.auth_service import AuthError, auth_service
+from app.services.auth_service import auth_service
 
 router = APIRouter()
 
@@ -29,12 +30,9 @@ async def login(
     request: UserLoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
-    try:
-        auth_data = await auth_service.sign_in_with_password(
-            email=request.email, password=request.password
-        )
-    except AuthError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    auth_data = await auth_service.sign_in_with_password(
+        email=request.email, password=request.password
+    )
 
     user_id = auth_data["user_id"]
 
@@ -43,10 +41,7 @@ async def login(
     user = result.scalar_one_or_none()
 
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuário não possui vínculo com nenhuma organização.",
-        )
+        raise ForbiddenException("Usuário não possui vínculo com nenhuma organização.")
 
     # Consulta vínculo organizacional
     member_res = await db.execute(
@@ -55,16 +50,10 @@ async def login(
     member = member_res.scalar_one_or_none()
 
     if member is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuário não possui vínculo com nenhuma organização.",
-        )
+        raise ForbiddenException("Usuário não possui vínculo com nenhuma organização.")
 
     if not member.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso de usuário desativado na organização.",
-        )
+        raise ForbiddenException("Acesso de usuário desativado na organização.")
 
     return TokenResponse(
         access_token=auth_data["access_token"],
@@ -82,15 +71,12 @@ async def login(
     summary="Renova token de acesso a partir do refresh token",
 )
 async def refresh_token(request: RefreshTokenRequest) -> RefreshTokenResponse:
-    try:
-        session_data = await auth_service.refresh_session(request.refresh_token)
-        return RefreshTokenResponse(
-            access_token=session_data["access_token"],
-            refresh_token=session_data.get("refresh_token"),
-            token_type="bearer",
-        )
-    except AuthError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    session_data = await auth_service.refresh_session(request.refresh_token)
+    return RefreshTokenResponse(
+        access_token=session_data["access_token"],
+        refresh_token=session_data.get("refresh_token"),
+        token_type="bearer",
+    )
 
 
 @router.get(
@@ -106,10 +92,10 @@ async def get_me(
         id=current_user.id,
         email=current_user.email,
         full_name=current_user.full_name,
+        created_at=current_user.created_at,
+        role=current_member.role,
+        is_active=current_member.is_active,
         organization_id=current_member.organization_id,
         organization_name=current_member.organization.name,
         organization_slug=current_member.organization.slug,
-        role=current_member.role,
-        is_active=current_member.is_active,
-        created_at=current_user.created_at,
     )
