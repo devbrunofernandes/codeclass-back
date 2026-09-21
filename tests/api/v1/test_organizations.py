@@ -5,14 +5,18 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import OrgRole
+from app.core.database import async_session_maker
 from app.models.organization import Organization
 from app.models.user import User
 from app.services.auth_service import auth_service
+from tests.conftest import TenantContext
 
 
 @pytest.mark.asyncio
-async def test_register_organization_success(async_client: AsyncClient, monkeypatch):
+async def test_register_organization_when_valid_should_create_organization_and_owner(
+    async_client: AsyncClient, monkeypatch
+):
+    # Arrange
     owner_id = uuid.uuid4()
     mock_create = AsyncMock(
         return_value={
@@ -35,7 +39,10 @@ async def test_register_organization_success(async_client: AsyncClient, monkeypa
         },
     }
 
+    # Act
     response = await async_client.post("/api/v1/orgs", json=payload)
+
+    # Assert
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "Universidade Exemplo"
@@ -44,9 +51,24 @@ async def test_register_organization_success(async_client: AsyncClient, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_register_organization_duplicate_slug(
+async def test_register_organization_when_payload_is_invalid_should_return_422(
+    async_client: AsyncClient,
+):
+    # Arrange: payload sem campos obrigatórios
+    payload = {"name": "Org Sem Slug"}
+
+    # Act
+    response = await async_client.post("/api/v1/orgs", json=payload)
+
+    # Assert
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_register_organization_when_slug_is_duplicated_should_return_409(
     async_client: AsyncClient, monkeypatch
 ):
+    # Arrange
     first_owner_id = uuid.uuid4()
     second_owner_id = uuid.uuid4()
     slug = f"dup-slug-{first_owner_id.hex[:6]}"
@@ -88,370 +110,167 @@ async def test_register_organization_duplicate_slug(
             "password": "password123",
         },
     }
+
+    # Act
     res2 = await async_client.post("/api/v1/orgs", json=payload2)
+
+    # Assert
     assert res2.status_code == 409
     assert "slug" in res2.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_get_organization_and_tenant_isolation(
-    async_client: AsyncClient, create_access_token, monkeypatch
+async def test_get_organization_and_tenant_isolation_should_enforce_rnf01(
+    async_client: AsyncClient, tenant: TenantContext, create_tenant
 ):
-    # Cadastra Org 1
-    org1_owner_id = uuid.uuid4()
-    slug1 = f"org1-{org1_owner_id.hex[:6]}"
-    email1 = f"owner_{org1_owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": org1_owner_id, "email": email1, "full_name": "Owner 1"}
-        ),
-    )
-    res1 = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org 1",
-            "slug": slug1,
-            "owner": {
-                "email": email1,
-                "full_name": "Owner 1",
-                "password": "password123",
-            },
-        },
-    )
-    assert res1.status_code == 201
-    org1_id = res1.json()["id"]
+    # Arrange: Cria segundo tenant
+    other_tenant = await create_tenant("Outra Org")
 
-    # Cadastra Org 2
-    org2_owner_id = uuid.uuid4()
-    slug2 = f"org2-{org2_owner_id.hex[:6]}"
-    email2 = f"owner_{org2_owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": org2_owner_id, "email": email2, "full_name": "Owner 2"}
-        ),
-    )
-    res2 = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org 2",
-            "slug": slug2,
-            "owner": {
-                "email": email2,
-                "full_name": "Owner 2",
-                "password": "password123",
-            },
-        },
-    )
-    assert res2.status_code == 201
-    org2_id = res2.json()["id"]
-
-    # Token do Owner 1
-    token1 = create_access_token(org1_owner_id, email=email1, full_name="Owner 1")
-    # Token do Owner 2
-    token2 = create_access_token(org2_owner_id, email=email2, full_name="Owner 2")
-
-    # Owner 1 acessa Org 1 (sucesso 200)
+    # Act & Assert: Owner 1 acessa Org 1 com sucesso -> 200
     get_res1 = await async_client.get(
-        f"/api/v1/orgs/{org1_id}",
-        headers={"Authorization": f"Bearer {token1}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
     assert get_res1.status_code == 200
-    assert get_res1.json()["slug"] == slug1
+    assert get_res1.json()["id"] == str(tenant.org.id)
 
-    # Owner 2 tenta acessar Org 1 (bloqueio 403 RNF01 isolamento multi-tenant)
+    # Act & Assert: Owner 2 tenta acessar Org 1 -> bloqueio 403 (RNF01)
     get_res2 = await async_client.get(
-        f"/api/v1/orgs/{org1_id}",
-        headers={"Authorization": f"Bearer {token2}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {other_tenant.owner.token}"},
     )
     assert get_res2.status_code == 403
 
-    # Owner 1 tenta acessar Org 2 (bloqueio 403)
+    # Act & Assert: Owner 1 tenta acessar Org 2 -> bloqueio 403 (RNF01)
     get_res3 = await async_client.get(
-        f"/api/v1/orgs/{org2_id}",
-        headers={"Authorization": f"Bearer {token1}"},
+        f"/api/v1/orgs/{other_tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
     assert get_res3.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_update_and_delete_organization_owner(
+async def test_update_and_delete_organization_lifecycle(
     async_client: AsyncClient,
-    create_access_token,
-    monkeypatch,
+    tenant: TenantContext,
     db_session: AsyncSession,
 ):
-    owner_id = uuid.uuid4()
-    slug = f"org-up-{owner_id.hex[:6]}"
-    email = f"owner_{owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Owner"}),
-    )
-
-    res = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Nome Original",
-            "slug": slug,
-            "owner": {"email": email, "full_name": "Owner", "password": "password123"},
-        },
-    )
-    assert res.status_code == 201
-    org_id = res.json()["id"]
-
-    token = create_access_token(owner_id, email=email, full_name="Owner")
-
-    # PATCH (Atualizar nome)
+    # Act: PATCH (Atualizar nome)
     patch_res = await async_client.patch(
-        f"/api/v1/orgs/{org_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"name": "Nome Atualizado"},
     )
+    # Assert
     assert patch_res.status_code == 200
     assert patch_res.json()["name"] == "Nome Atualizado"
 
-    # DELETE
+    # Act: DELETE
     del_res = await async_client.delete(
-        f"/api/v1/orgs/{org_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
+    # Assert
     assert del_res.status_code == 204
 
-    # Consulta pós-exclusão com o token do usuário deletado retorna 401 (usuário não existe mais)
+    # Consulta pós-exclusão com o token do usuário deletado retorna 401 (usuário removido)
     get_res = await async_client.get(
-        f"/api/v1/orgs/{org_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
     assert get_res.status_code == 401
 
     # Validação direta no banco: Organization e User foram removidos
-    assert await db_session.get(Organization, uuid.UUID(org_id)) is None
-    assert await db_session.get(User, owner_id) is None
+    async with async_session_maker() as verify_session:
+        assert await verify_session.get(Organization, tenant.org.id) is None
+        assert await verify_session.get(User, tenant.owner.user.id) is None
 
 
 @pytest.mark.asyncio
 async def test_delete_organization_deletes_all_members_and_users(
     async_client: AsyncClient,
-    create_access_token,
-    monkeypatch,
+    tenant: TenantContext,
     db_session: AsyncSession,
 ):
-    owner_id = uuid.uuid4()
-    teacher_id = uuid.uuid4()
-    org_slug = f"org-del-{owner_id.hex[:6]}"
-    owner_email = f"owner_{owner_id.hex[:6]}@example.com"
-    teacher_email = f"teacher_{teacher_id.hex[:6]}@example.com"
+    # Arrange: Garante que existem múltiplos usuários antes da exclusão
+    assert await db_session.get(User, tenant.owner.user.id) is not None
+    assert await db_session.get(User, tenant.teacher.user.id) is not None
+    assert await db_session.get(User, tenant.student.user.id) is not None
 
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": owner_id, "email": owner_email, "full_name": "Owner"}
-        ),
-    )
-
-    # 1. Cria organização
-    res = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Multi Membros",
-            "slug": org_slug,
-            "owner": {
-                "email": owner_email,
-                "full_name": "Owner",
-                "password": "password123",
-            },
-        },
-    )
-    assert res.status_code == 201
-    org_id = res.json()["id"]
-    owner_token = create_access_token(owner_id, email=owner_email, full_name="Owner")
-
-    # 2. Adiciona um professor
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={
-                "id": teacher_id,
-                "email": teacher_email,
-                "full_name": "Teacher",
-            }
-        ),
-    )
-    member_res = await async_client.post(
-        f"/api/v1/orgs/{org_id}/members",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={
-            "email": teacher_email,
-            "full_name": "Teacher",
-            "password": "password123",
-            "role": OrgRole.TEACHER.value,
-        },
-    )
-    assert member_res.status_code == 201
-
-    # Confirma que ambos existem no banco
-    assert await db_session.get(User, owner_id) is not None
-    assert await db_session.get(User, teacher_id) is not None
-
-    # 3. Deleta a organização
+    # Act: Deleta a organização
     del_res = await async_client.delete(
-        f"/api/v1/orgs/{org_id}",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
+    # Assert
     assert del_res.status_code == 204
 
-    # 4. Verifica no banco que a organização e TODOS os usuários foram removidos
-    assert await db_session.get(Organization, uuid.UUID(org_id)) is None
-    assert await db_session.get(User, owner_id) is None
-    assert await db_session.get(User, teacher_id) is None
+    # Valida que a organização e TODOS os usuários vinculados foram removidos do banco
+    async with async_session_maker() as verify_session:
+        assert await verify_session.get(Organization, tenant.org.id) is None
+        assert await verify_session.get(User, tenant.owner.user.id) is None
+        assert await verify_session.get(User, tenant.teacher.user.id) is None
+        assert await verify_session.get(User, tenant.student.user.id) is None
 
 
 @pytest.mark.asyncio
 async def test_list_organization_classrooms_admin_and_owner(
-    async_client: AsyncClient, create_access_token, monkeypatch
+    async_client: AsyncClient, tenant: TenantContext
 ):
-    owner_id = uuid.uuid4()
-    slug = f"org-cls-{owner_id.hex[:6]}"
-    email = f"owner_{owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Owner"}),
-    )
-
-    res = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Salas",
-            "slug": slug,
-            "owner": {"email": email, "full_name": "Owner", "password": "password123"},
-        },
-    )
-    assert res.status_code == 201
-    org_id = res.json()["id"]
-
-    token = create_access_token(owner_id, email=email, full_name="Owner")
-
-    # Consulta salas da org (deve retornar 200 e lista vazia inicialmente)
+    # Act: Consulta salas da org
     cls_res = await async_client.get(
-        f"/api/v1/orgs/{org_id}/classrooms",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
+
+    # Assert
     assert cls_res.status_code == 200
     assert isinstance(cls_res.json(), list)
 
 
 @pytest.mark.asyncio
 async def test_organization_and_transfer_ownership_edge_cases(
-    async_client: AsyncClient, create_access_token, monkeypatch
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    create_tenant,
 ):
-    owner_id = uuid.uuid4()
-    slug = f"org-edge-{owner_id.hex[:6]}"
-    email = f"owner_{owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(return_value={"id": owner_id, "email": email, "full_name": "Owner"}),
-    )
-
-    res = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Edge",
-            "slug": slug,
-            "owner": {"email": email, "full_name": "Owner", "password": "password123"},
-        },
-    )
-    assert res.status_code == 201
-    org_id = res.json()["id"]
-    owner_token = create_access_token(owner_id, email=email, full_name="Owner")
-
-    # 1. Cria uma segunda org para testar conflito de slug no update
-    owner2_id = uuid.uuid4()
-    slug2 = f"org-edge2-{owner2_id.hex[:6]}"
-    email2 = f"owner2_{owner2_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": owner2_id, "email": email2, "full_name": "Owner 2"}
-        ),
-    )
-    await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Edge 2",
-            "slug": slug2,
-            "owner": {
-                "email": email2,
-                "full_name": "Owner 2",
-                "password": "password123",
-            },
-        },
-    )
-
-    # 2. Tenta atualizar slug da Org 1 para o slug da Org 2 -> 409
+    # 1. Conflito de slug ao tentar usar o slug de outra organização existente -> 409
+    other_tenant = await create_tenant("Outra Org")
     res_conflict = await async_client.patch(
-        f"/api/v1/orgs/{org_id}",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={"slug": slug2},
+        f"/api/v1/orgs/{tenant.org.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        json={"slug": other_tenant.org.slug},
     )
     assert res_conflict.status_code == 409
 
-    # 3. Transferir posse para si mesmo -> 400
+    # 2. Transferir posse para si mesmo -> 400
     res_transfer_self = await async_client.put(
-        f"/api/v1/orgs/{org_id}/owner",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={"new_owner_id": str(owner_id)},
+        f"/api/v1/orgs/{tenant.org.id}/owner",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        json={"new_owner_id": str(tenant.owner.user.id)},
     )
     assert res_transfer_self.status_code == 400
 
-    # 4. Transferir posse para usuário inexistente / não membro -> 404
+    # 3. Transferir posse para usuário inexistente / não membro -> 404
     non_member_id = uuid.uuid4()
     res_transfer_nf = await async_client.put(
-        f"/api/v1/orgs/{org_id}/owner",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/orgs/{tenant.org.id}/owner",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"new_owner_id": str(non_member_id)},
     )
     assert res_transfer_nf.status_code == 404
 
-    # 5. Cadastra membro, desativa e tenta transferir posse para membro inativo -> 400
-    m_id = uuid.uuid4()
-    m_email = f"m_{m_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": m_id, "email": m_email, "full_name": "Membro Inativo"}
-        ),
-    )
-    await async_client.post(
-        f"/api/v1/orgs/{org_id}/members",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={
-            "email": m_email,
-            "full_name": "Membro Inativo",
-            "password": "password123",
-            "role": OrgRole.TEACHER.value,
-        },
-    )
+    # 4. Desativa membro e tenta transferir posse para membro inativo -> 400
     await async_client.patch(
-        f"/api/v1/orgs/{org_id}/members/{m_id}/status",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"is_active": False},
     )
 
     res_transfer_inactive = await async_client.put(
-        f"/api/v1/orgs/{org_id}/owner",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={"new_owner_id": str(m_id)},
+        f"/api/v1/orgs/{tenant.org.id}/owner",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        json={"new_owner_id": str(tenant.student.user.id)},
     )
     assert res_transfer_inactive.status_code == 400
     assert "desativado" in res_transfer_inactive.json()["detail"].lower()

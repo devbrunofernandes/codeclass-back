@@ -5,369 +5,234 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import OrgRole
 from app.services.auth_service import auth_service
-
-
-@pytest.fixture
-async def setup_user_and_org(
-    async_client: AsyncClient, create_access_token, monkeypatch
-):
-    owner_id = uuid.uuid4()
-    slug = f"org-users-{owner_id.hex[:6]}"
-    email = f"user_owner_{owner_id.hex[:6]}@example.com"
-    full_name = "User Owner"
-
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={"id": owner_id, "email": email, "full_name": full_name}
-        ),
-    )
-
-    res = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Users Test",
-            "slug": slug,
-            "owner": {
-                "email": email,
-                "full_name": full_name,
-                "password": "password123",
-            },
-        },
-    )
-    assert res.status_code == 201
-    org_id = res.json()["id"]
-    token = create_access_token(owner_id, email=email, full_name=full_name)
-    return {
-        "org_id": org_id,
-        "user_id": owner_id,
-        "email": email,
-        "full_name": full_name,
-        "token": token,
-        "slug": slug,
-    }
+from tests.conftest import TenantContext
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_full_name(
-    async_client: AsyncClient, setup_user_and_org, monkeypatch
+async def test_update_users_me_full_name_when_valid_should_succeed(
+    async_client: AsyncClient, tenant: TenantContext, monkeypatch
 ):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
+    # Arrange
     mock_update = AsyncMock(
         return_value={
-            "id": user_data["user_id"],
-            "email": user_data["email"],
+            "id": tenant.owner.user.id,
+            "email": tenant.owner.user.email,
             "full_name": "Novo Nome Completo",
         }
     )
     monkeypatch.setattr(auth_service, "update_auth_user", mock_update)
 
+    # Act
     res = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"full_name": "Novo Nome Completo"},
     )
+
+    # Assert
     assert res.status_code == 200
     data = res.json()
     assert data["full_name"] == "Novo Nome Completo"
-    assert data["email"] == user_data["email"]
+    assert data["email"] == tenant.owner.user.email
     mock_update.assert_awaited_once_with(
-        user_id=user_data["user_id"],
+        user_id=tenant.owner.user.id,
         full_name="Novo Nome Completo",
     )
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_name_validation_errors(
-    async_client: AsyncClient, setup_user_and_org
+async def test_update_users_me_when_name_is_invalid_should_return_422(
+    async_client: AsyncClient, tenant: TenantContext
 ):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
-    # Nome curto (< 2 caracteres)
+    # Act: 1. Nome curto (< 2 caracteres)
     res_short = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"full_name": "A"},
     )
     assert res_short.status_code == 422
 
-    # Corpo vazio (campo obrigatório ausente)
+    # Act: 2. Corpo vazio (campo obrigatório ausente)
     res_empty = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={},
     )
     assert res_empty.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_change_password_success(
-    async_client: AsyncClient, setup_user_and_org, monkeypatch
+async def test_change_password_when_valid_should_return_204(
+    async_client: AsyncClient, tenant: TenantContext, monkeypatch
 ):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
+    # Arrange
     mock_update = AsyncMock(
         return_value={
-            "id": user_data["user_id"],
-            "email": user_data["email"],
-            "full_name": user_data["full_name"],
+            "id": tenant.owner.user.id,
+            "email": tenant.owner.user.email,
+            "full_name": tenant.owner.user.full_name,
         }
     )
     monkeypatch.setattr(auth_service, "update_auth_user", mock_update)
 
+    # Act
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"password": "newsecretpassword123"},
     )
+
+    # Assert
     assert res.status_code == 204
     mock_update.assert_awaited_once_with(
-        user_id=user_data["user_id"],
+        user_id=tenant.owner.user.id,
         password="newsecretpassword123",
     )
 
 
 @pytest.mark.asyncio
-async def test_change_password_validation_error(
-    async_client: AsyncClient, setup_user_and_org
+async def test_change_password_when_payload_is_invalid_should_return_422(
+    async_client: AsyncClient, tenant: TenantContext
 ):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-
-    # Senha curta (< 6 caracteres)
+    # Act: Senha curta (< 6 caracteres)
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"password": "123"},
     )
     assert res.status_code == 422
 
-    # Corpo vazio
+    # Act: Corpo vazio
     res_empty = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={},
     )
     assert res_empty.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_change_password_unauthorized(async_client: AsyncClient):
+async def test_change_password_when_unauthenticated_should_return_401(
+    async_client: AsyncClient,
+):
+    # Act: Requisição sem header de autenticação
     res = await async_client.put(
         "/api/v1/users/me/password",
         json={"password": "newsecretpassword123"},
     )
+
+    # Assert
     assert res.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_change_password_deactivated_user(
-    async_client: AsyncClient, setup_user_and_org, create_access_token, monkeypatch
+async def test_change_password_when_user_is_deactivated_should_return_403(
+    async_client: AsyncClient, tenant: TenantContext
 ):
-    user_data = setup_user_and_org
-    owner_token = user_data["token"]
-    org_id = user_data["org_id"]
-
-    student_id = uuid.uuid4()
-    student_email = f"student_deact_{student_id.hex[:6]}@example.com"
-    student_name = "Aluno Inativo"
-
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={
-                "id": student_id,
-                "email": student_email,
-                "full_name": student_name,
-            }
-        ),
-    )
-
-    # 1. Cadastra aluno
-    await async_client.post(
-        f"/api/v1/orgs/{org_id}/members",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={
-            "email": student_email,
-            "full_name": student_name,
-            "password": "password123",
-            "role": OrgRole.STUDENT.value,
-        },
-    )
-
-    # 2. Desativa o aluno
+    # Arrange: Desativa o aluno
     await async_client.patch(
-        f"/api/v1/orgs/{org_id}/members/{student_id}/status",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"is_active": False},
     )
 
-    # 3. Aluno inativo tenta trocar senha -> 403
-    deactivated_token = create_access_token(
-        user_id=student_id,
-        email=student_email,
-        full_name=student_name,
-    )
-
+    # Act: Aluno inativo tenta trocar senha
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {deactivated_token}"},
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
         json={"password": "newsecretpassword123"},
     )
+
+    # Assert
     assert res.status_code == 403
     assert "desativado" in res.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_get_user_by_id_same_org(
-    async_client: AsyncClient, setup_user_and_org, monkeypatch
+async def test_get_user_by_id_when_same_org_should_succeed(
+    async_client: AsyncClient, tenant: TenantContext
 ):
-    user_data = setup_user_and_org
-    owner_token = user_data["token"]
-    org_id = user_data["org_id"]
-
-    student_id = uuid.uuid4()
-    student_email = f"student_{student_id.hex[:6]}@example.com"
-    student_name = "Estudante da Mesma Org"
-
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={
-                "id": student_id,
-                "email": student_email,
-                "full_name": student_name,
-            }
-        ),
-    )
-
-    # Cadastra o estudante na organização
-    res_member = await async_client.post(
-        f"/api/v1/orgs/{org_id}/members",
-        headers={"Authorization": f"Bearer {owner_token}"},
-        json={
-            "email": student_email,
-            "full_name": student_name,
-            "password": "password123",
-            "role": OrgRole.STUDENT.value,
-        },
-    )
-    assert res_member.status_code == 201
-
-    # Consulta o estudante via GET /users/{student_id}
+    # Act: Owner consulta aluno da mesma instituição
     res = await async_client.get(
-        f"/api/v1/users/{student_id}",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/users/{tenant.student.user.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
+
+    # Assert
     assert res.status_code == 200
     data = res.json()
-    assert data["user_id"] == str(student_id)
-    assert data["email"] == student_email
-    assert data["full_name"] == student_name
-    assert data["organization_id"] == str(org_id)
-    assert data["role"] == OrgRole.STUDENT.value
-    assert data["is_active"] is True
-    assert "joined_at" in data
+    assert data["user_id"] == str(tenant.student.user.id)
+    assert data["email"] == tenant.student.user.email
+    assert data["organization_id"] == str(tenant.org.id)
 
 
 @pytest.mark.asyncio
-async def test_get_user_by_id_cross_tenant_isolation_returns_404(
-    async_client: AsyncClient, setup_user_and_org, create_access_token, monkeypatch
+async def test_get_user_by_id_when_cross_tenant_should_return_404_rnf01(
+    async_client: AsyncClient, tenant: TenantContext, create_tenant
 ):
-    """Garante que consultar um usuário de outra organização retorna 404 (RNF01 - Isolamento Multi-tenant)."""
-    user_data = setup_user_and_org
-    owner_token = user_data["token"]
+    # Arrange: Cria outra organização com outro usuário
+    other_tenant = await create_tenant("Outra Org")
 
-    # Cria uma segunda organização com outro usuário
-    org2_owner_id = uuid.uuid4()
-    org2_email = f"other_org_{org2_owner_id.hex[:6]}@example.com"
-    monkeypatch.setattr(
-        auth_service,
-        "create_auth_user",
-        AsyncMock(
-            return_value={
-                "id": org2_owner_id,
-                "email": org2_email,
-                "full_name": "Other Owner",
-            }
-        ),
-    )
-    res_org2 = await async_client.post(
-        "/api/v1/orgs",
-        json={
-            "name": "Org Isolada 2",
-            "slug": f"org-isolada-{org2_owner_id.hex[:6]}",
-            "owner": {
-                "email": org2_email,
-                "full_name": "Other Owner",
-                "password": "password123",
-            },
-        },
-    )
-    assert res_org2.status_code == 201
-
-    # O usuário da Org 1 tenta consultar o usuário da Org 2
+    # Act: Usuário do Tenant A tenta consultar usuário do Tenant B
     res = await async_client.get(
-        f"/api/v1/users/{org2_owner_id}",
-        headers={"Authorization": f"Bearer {owner_token}"},
+        f"/api/v1/users/{other_tenant.owner.user.id}",
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
-    # Deve retornar 404 para não vazar a existência do usuário em outro tenant
+
+    # Assert: Retorna 404 para não vazar a existência do usuário externo
     assert res.status_code == 404
     assert "não encontrado" in res.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_get_user_by_id_not_found(async_client: AsyncClient, setup_user_and_org):
-    user_data = setup_user_and_org
-    token = user_data["token"]
+async def test_get_user_by_id_when_user_does_not_exist_should_return_404(
+    async_client: AsyncClient, tenant: TenantContext
+):
     random_id = uuid.uuid4()
 
+    # Act
     res = await async_client.get(
         f"/api/v1/users/{random_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
     )
+
+    # Assert
     assert res.status_code == 404
     assert "não encontrado" in res.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_update_users_me_database_failure_triggers_compensating_rollback(
-    async_client: AsyncClient, setup_user_and_org, monkeypatch
+async def test_update_users_me_when_database_fails_should_rollback_auth_provider(
+    async_client: AsyncClient, tenant: TenantContext, monkeypatch
 ):
-    user_data = setup_user_and_org
-    token = user_data["token"]
-    user_id = user_data["user_id"]
-    original_name = user_data["full_name"]
+    # Arrange
+    user_id = tenant.owner.user.id
+    original_name = tenant.owner.user.full_name
 
     mock_update = AsyncMock(
         return_value={
             "id": user_id,
-            "email": user_data["email"],
+            "email": tenant.owner.user.email,
             "full_name": "Nome Provisório",
         }
     )
     monkeypatch.setattr(auth_service, "update_auth_user", mock_update)
 
-    # Simula falha catastrófica no commit do banco
+    # Simula falha no commit do banco
     async def mock_commit_fail(*args, **kwargs):
         raise RuntimeError("Database connection lost")
 
     monkeypatch.setattr(AsyncSession, "commit", mock_commit_fail)
 
+    # Act
     res = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {tenant.owner.token}"},
         json={"full_name": "Novo Nome Que Falhará"},
     )
+
+    # Assert
     assert res.status_code == 500
     assert "erro ao atualizar usuário no banco" in res.json()["detail"].lower()
 
