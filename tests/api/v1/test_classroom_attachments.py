@@ -1,32 +1,12 @@
 import io
-import uuid
 from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.classroom import Classroom, ClassroomStudent
+from app.models.classroom import Classroom
 from app.services.storage_service import StorageError, storage_service
 from tests.conftest import TenantContext
-
-
-@pytest.fixture
-async def classroom_with_student(tenant: TenantContext, db_session: AsyncSession):
-    """Cria sala de aula com o estudante do tenant matriculado."""
-    c = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Turma Anexos",
-    )
-    db_session.add(c)
-    await db_session.flush()
-
-    enrollment = ClassroomStudent(classroom_id=c.id, student_id=tenant.student.user.id)
-    db_session.add(enrollment)
-    await db_session.commit()
-    return c
 
 
 @pytest.mark.asyncio
@@ -54,7 +34,7 @@ async def test_upload_attachment_when_called_by_teacher_or_owner_should_succeed(
     res_t = await async_client.post(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
         files=files,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -75,7 +55,7 @@ async def test_upload_attachment_when_called_by_teacher_or_owner_should_succeed(
     res_o = await async_client.post(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
         files=files_owner,
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_o.status_code == 201
 
@@ -93,7 +73,7 @@ async def test_upload_attachment_when_student_attempts_upload_should_return_403(
     res = await async_client.post(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
         files=files,
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
 
     # Assert
@@ -124,7 +104,7 @@ async def test_upload_attachment_when_file_exceeds_limit_should_return_413(
     res = await async_client.post(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
         files=files,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -160,7 +140,7 @@ async def test_list_and_download_attachments_for_enrolled_student_should_succeed
     # Act & Assert: Aluno matriculado lista materiais -> 200
     res_list = await async_client.get(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_list.status_code == 200
     files = res_list.json()
@@ -170,7 +150,7 @@ async def test_list_and_download_attachments_for_enrolled_student_should_succeed
     # Act & Assert: Aluno matriculado gera signed URL -> 200
     res_down = await async_client.get(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments/guia.pdf/download",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_down.status_code == 200
     assert "token=xyz" in res_down.json()["download_url"]
@@ -178,7 +158,7 @@ async def test_list_and_download_attachments_for_enrolled_student_should_succeed
     # Act & Assert: Aluno não matriculado é bloqueado -> 403
     res_fail = await async_client.get(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
-        headers={"Authorization": f"Bearer {tenant.other_student.token}"},
+        headers=tenant.other_student.auth_headers,
     )
     assert res_fail.status_code == 403
 
@@ -197,14 +177,14 @@ async def test_delete_attachment_rbac_permissions(
     # Act & Assert: Aluno não pode deletar -> 403
     res_fail = await async_client.delete(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments/slides.pdf",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_fail.status_code == 403
 
     # Act & Assert: Professor da turma deleta -> 204
     res_ok = await async_client.delete(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments/slides.pdf",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_ok.status_code == 204
 
@@ -220,13 +200,13 @@ async def test_admin_cannot_upload_or_delete_attachment_should_return_403(
     res_upload = await async_client.post(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments",
         files=files,
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_upload.status_code == 403
 
     # Act & Assert: Admin tenta deletar -> 403
     res_del = await async_client.delete(
         f"/api/v1/classrooms/{classroom_with_student.id}/attachments/slides.pdf",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_del.status_code == 403

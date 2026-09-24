@@ -26,7 +26,7 @@ async def test_update_users_me_full_name_when_valid_should_succeed(
     # Act
     res = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"full_name": "Novo Nome Completo"},
     )
 
@@ -48,7 +48,7 @@ async def test_update_users_me_when_name_is_invalid_should_return_422(
     # Act: 1. Nome curto (< 2 caracteres)
     res_short = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"full_name": "A"},
     )
     assert res_short.status_code == 422
@@ -56,7 +56,7 @@ async def test_update_users_me_when_name_is_invalid_should_return_422(
     # Act: 2. Corpo vazio (campo obrigatório ausente)
     res_empty = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={},
     )
     assert res_empty.status_code == 422
@@ -79,7 +79,7 @@ async def test_change_password_when_valid_should_return_204(
     # Act
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"password": "newsecretpassword123"},
     )
 
@@ -98,7 +98,7 @@ async def test_change_password_when_payload_is_invalid_should_return_422(
     # Act: Senha curta (< 6 caracteres)
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"password": "123"},
     )
     assert res.status_code == 422
@@ -106,7 +106,7 @@ async def test_change_password_when_payload_is_invalid_should_return_422(
     # Act: Corpo vazio
     res_empty = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={},
     )
     assert res_empty.status_code == 422
@@ -133,14 +133,14 @@ async def test_change_password_when_user_is_deactivated_should_return_403(
     # Arrange: Desativa o aluno
     await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
 
     # Act: Aluno inativo tenta trocar senha
     res = await async_client.put(
         "/api/v1/users/me/password",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
         json={"password": "newsecretpassword123"},
     )
 
@@ -156,7 +156,7 @@ async def test_get_user_by_id_when_same_org_should_succeed(
     # Act: Owner consulta aluno da mesma instituição
     res = await async_client.get(
         f"/api/v1/users/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
 
     # Assert
@@ -177,7 +177,7 @@ async def test_get_user_by_id_when_cross_tenant_should_return_404_rnf01(
     # Act: Usuário do Tenant A tenta consultar usuário do Tenant B
     res = await async_client.get(
         f"/api/v1/users/{other_tenant.owner.user.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
 
     # Assert: Retorna 404 para não vazar a existência do usuário externo
@@ -194,7 +194,7 @@ async def test_get_user_by_id_when_user_does_not_exist_should_return_404(
     # Act
     res = await async_client.get(
         f"/api/v1/users/{random_id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
 
     # Assert
@@ -228,7 +228,7 @@ async def test_update_users_me_when_database_fails_should_rollback_auth_provider
     # Act
     res = await async_client.patch(
         "/api/v1/users/me",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"full_name": "Novo Nome Que Falhará"},
     )
 

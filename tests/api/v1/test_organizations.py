@@ -129,7 +129,7 @@ async def test_get_organization_and_tenant_isolation_should_enforce_rnf01(
     # Act & Assert: Owner 1 acessa Org 1 com sucesso -> 200
     get_res1 = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert get_res1.status_code == 200
     assert get_res1.json()["id"] == str(tenant.org.id)
@@ -137,14 +137,14 @@ async def test_get_organization_and_tenant_isolation_should_enforce_rnf01(
     # Act & Assert: Owner 2 tenta acessar Org 1 -> bloqueio 403 (RNF01)
     get_res2 = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {other_tenant.owner.token}"},
+        headers=other_tenant.owner.auth_headers,
     )
     assert get_res2.status_code == 403
 
     # Act & Assert: Owner 1 tenta acessar Org 2 -> bloqueio 403 (RNF01)
     get_res3 = await async_client.get(
         f"/api/v1/orgs/{other_tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert get_res3.status_code == 403
 
@@ -158,7 +158,7 @@ async def test_update_and_delete_organization_lifecycle(
     # Act: PATCH (Atualizar nome)
     patch_res = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"name": "Nome Atualizado"},
     )
     # Assert
@@ -168,7 +168,7 @@ async def test_update_and_delete_organization_lifecycle(
     # Act: DELETE
     del_res = await async_client.delete(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     # Assert
     assert del_res.status_code == 204
@@ -176,7 +176,7 @@ async def test_update_and_delete_organization_lifecycle(
     # Consulta pós-exclusão com o token do usuário deletado retorna 401 (usuário removido)
     get_res = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert get_res.status_code == 401
 
@@ -200,7 +200,7 @@ async def test_delete_organization_deletes_all_members_and_users(
     # Act: Deleta a organização
     del_res = await async_client.delete(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     # Assert
     assert del_res.status_code == 204
@@ -220,7 +220,7 @@ async def test_list_organization_classrooms_admin_and_owner(
     # Act: Consulta salas da org
     cls_res = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/classrooms",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
 
     # Assert
@@ -238,7 +238,7 @@ async def test_organization_and_transfer_ownership_edge_cases(
     other_tenant = await create_tenant("Outra Org")
     res_conflict = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"slug": other_tenant.org.slug},
     )
     assert res_conflict.status_code == 409
@@ -246,7 +246,7 @@ async def test_organization_and_transfer_ownership_edge_cases(
     # 2. Transferir posse para si mesmo -> 400
     res_transfer_self = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/owner",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"new_owner_id": str(tenant.owner.user.id)},
     )
     assert res_transfer_self.status_code == 400
@@ -255,7 +255,7 @@ async def test_organization_and_transfer_ownership_edge_cases(
     non_member_id = uuid.uuid4()
     res_transfer_nf = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/owner",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"new_owner_id": str(non_member_id)},
     )
     assert res_transfer_nf.status_code == 404
@@ -263,13 +263,13 @@ async def test_organization_and_transfer_ownership_edge_cases(
     # 4. Desativa membro e tenta transferir posse para membro inativo -> 400
     await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
 
     res_transfer_inactive = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/owner",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"new_owner_id": str(tenant.student.user.id)},
     )
     assert res_transfer_inactive.status_code == 400

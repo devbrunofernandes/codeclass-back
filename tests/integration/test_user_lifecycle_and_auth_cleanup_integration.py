@@ -19,8 +19,8 @@ async def test_delete_organization_cleans_up_auth_users_table(
     db_session: AsyncSession,
 ) -> None:
     """Valida que a deleção de uma organização limpa os usuários de public.users e de auth.users."""
-    owner_uuid = uuid.UUID(registered_org.owner_id)
-    org_uuid = uuid.UUID(registered_org.org_id)
+    owner_uuid = registered_org.owner_uuid
+    org_uuid = registered_org.org_uuid
 
     # 1. Cadastra um membro adicional (Professor) com usuário real no GoTrue
     uid_suffix = uuid.uuid4().hex[:6]

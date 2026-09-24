@@ -1,6 +1,5 @@
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.classroom import Classroom, ClassroomStudent
 from tests.conftest import TenantContext
@@ -14,7 +13,7 @@ async def test_enroll_student_when_valid_should_enroll_successfully(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(tenant.student.user.id)},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -27,7 +26,7 @@ async def test_enroll_student_when_valid_should_enroll_successfully(
     res_owner = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(tenant.other_student.user.id)},
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_owner.status_code == 201
     assert res_owner.json()["student_id"] == str(tenant.other_student.user.id)
@@ -41,7 +40,7 @@ async def test_enroll_student_when_payload_is_invalid_should_return_422(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": "not-a-valid-uuid"},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -56,14 +55,14 @@ async def test_enroll_student_when_already_enrolled_should_return_409_conflict(
     await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(tenant.student.user.id)},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Act: Tentativa de matrícula duplicada
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(tenant.student.user.id)},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -84,7 +83,7 @@ async def test_enroll_student_when_cross_tenant_should_return_error(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(other_tenant.student.user.id)},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -99,7 +98,7 @@ async def test_enroll_student_when_member_is_not_student_role_should_return_400(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/students",
         json={"student_id": str(tenant.teacher.user.id)},
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
 
     # Assert
@@ -112,19 +111,12 @@ async def test_get_classroom_members_and_alias_endpoints_should_return_members_l
     async_client: AsyncClient,
     tenant: TenantContext,
     classroom: Classroom,
-    db_session: AsyncSession,
+    enrolled_student: ClassroomStudent,
 ):
-    # Arrange: Matricula student
-    enrollment = ClassroomStudent(
-        classroom_id=classroom.id, student_id=tenant.student.user.id
-    )
-    db_session.add(enrollment)
-    await db_session.commit()
-
     # Act & Assert: Via rota descritiva /members
     res_members = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}/members",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_members.status_code == 200
     data = res_members.json()
@@ -135,7 +127,7 @@ async def test_get_classroom_members_and_alias_endpoints_should_return_members_l
     # Act & Assert: Via rota alias /students para retrocompatibilidade
     res_students = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}/students",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_students.status_code == 200
     data_students = res_students.json()
@@ -148,32 +140,25 @@ async def test_delete_student_from_classroom_rbac_and_removal(
     async_client: AsyncClient,
     tenant: TenantContext,
     classroom: Classroom,
-    db_session: AsyncSession,
+    enrolled_student: ClassroomStudent,
 ):
-    # Arrange: Matricula aluno
-    enrollment = ClassroomStudent(
-        classroom_id=classroom.id, student_id=tenant.student.user.id
-    )
-    db_session.add(enrollment)
-    await db_session.commit()
-
     # Act & Assert: Outro aluno tenta desmatricular -> 403
     res_fail = await async_client.delete(
         f"/api/v1/classrooms/{classroom.id}/students/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.other_student.token}"},
+        headers=tenant.other_student.auth_headers,
     )
     assert res_fail.status_code == 403
 
     # Act & Assert: Professor da turma desmatricula com sucesso -> 204
     res_ok = await async_client.delete(
         f"/api/v1/classrooms/{classroom.id}/students/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_ok.status_code == 204
 
     # Act & Assert: Tentativa de remover novamente -> 404
     res_not_found = await async_client.delete(
         f"/api/v1/classrooms/{classroom.id}/students/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_not_found.status_code == 404

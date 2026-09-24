@@ -34,7 +34,7 @@ async def test_create_code_assignment_when_called_by_teacher_should_create_succe
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -82,7 +82,7 @@ async def test_create_questionnaire_assignment_when_called_by_teacher_should_cre
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -121,7 +121,7 @@ async def test_create_questionnaire_100_percent_objective_with_immediate_policy_
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -148,7 +148,7 @@ async def test_create_code_assignment_with_immediate_policy_should_return_422(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -182,7 +182,7 @@ async def test_create_questionnaire_with_open_questions_and_immediate_policy_sho
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -208,7 +208,7 @@ async def test_create_assignment_when_called_by_student_or_admin_should_return_4
     res_student = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_student.status_code == 403
 
@@ -216,7 +216,7 @@ async def test_create_assignment_when_called_by_student_or_admin_should_return_4
     res_admin = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_admin.status_code == 403
 
@@ -229,7 +229,7 @@ async def test_create_assignment_when_payload_is_invalid_should_return_422(
     response = await async_client.post(
         f"/api/v1/classrooms/{classroom.id}/assignments",
         json={"title": "Incompleto"},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert response.status_code == 422
 
@@ -259,7 +259,7 @@ async def test_list_assignments_when_called_by_teacher_should_return_full_detail
     # Act
     response = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}/assignments",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -281,7 +281,7 @@ async def test_list_assignments_when_called_by_enrolled_student_should_return_sa
     # Act
     response = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}/assignments",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
 
     # Assert
@@ -303,7 +303,7 @@ async def test_list_assignments_when_non_member_student_should_return_403(
     # Act: other_student não está matriculado na turma
     response = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}/assignments",
-        headers={"Authorization": f"Bearer {tenant.other_student.token}"},
+        headers=tenant.other_student.auth_headers,
     )
     assert response.status_code == 403
 
@@ -320,7 +320,7 @@ async def test_get_assignment_by_id_when_called_by_teacher_should_return_full_co
     # Act
     response = await async_client.get(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -340,7 +340,7 @@ async def test_get_assignment_by_id_when_called_by_enrolled_student_should_retur
     # Act
     response = await async_client.get(
         f"/api/v1/assignments/{assignment_with_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
 
     # Assert
@@ -360,7 +360,7 @@ async def test_get_assignment_by_id_when_non_member_student_should_return_403(
     # Act: other_student não pertence à sala da atividade
     response = await async_client.get(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.other_student.token}"},
+        headers=tenant.other_student.auth_headers,
     )
     assert response.status_code == 403
 
@@ -377,7 +377,7 @@ async def test_get_assignment_by_id_when_cross_tenant_should_return_403_or_404(
     # Act
     response = await async_client.get(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {other_tenant.teacher.token}"},
+        headers=other_tenant.teacher.auth_headers,
     )
 
     # Assert: RNF01 isolamento multi-tenant
@@ -392,7 +392,7 @@ async def test_get_assignment_by_id_when_not_found_should_return_404(
     random_id = uuid.uuid4()
     response = await async_client.get(
         f"/api/v1/assignments/{random_id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert response.status_code == 404
 
@@ -424,7 +424,7 @@ async def test_update_assignment_when_called_by_teacher_should_update_successful
     response = await async_client.patch(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -445,7 +445,7 @@ async def test_update_assignment_when_clearing_deadline_should_persist_none(
     response = await async_client.patch(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
         json={"deadline": None},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -463,7 +463,7 @@ async def test_update_assignment_when_setting_immediate_policy_on_code_should_re
     response = await async_client.patch(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
         json={"release_policy": "immediate"},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -481,7 +481,7 @@ async def test_update_assignment_when_called_by_non_teacher_should_return_403(
     response = await async_client.patch(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
         json={"title": "Tentativa Indevida"},
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert response.status_code == 403
 
@@ -498,7 +498,7 @@ async def test_delete_assignment_when_without_submissions_should_delete_successf
     # Act: Excluir tarefa sem submissões
     response = await async_client.delete(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -507,7 +507,7 @@ async def test_delete_assignment_when_without_submissions_should_delete_successf
     # Confirma que foi excluída
     get_res = await async_client.get(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert get_res.status_code == 404
 
@@ -521,7 +521,7 @@ async def test_delete_assignment_when_with_submissions_should_return_400_bad_req
     # Act: Exclusão deve ser bloqueada por integridade pedagógica
     response = await async_client.delete(
         f"/api/v1/assignments/{assignment_with_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -538,13 +538,13 @@ async def test_delete_assignment_when_called_by_student_or_admin_should_return_4
     # Act & Assert - Aluno
     res_student = await async_client.delete(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_student.status_code == 403
 
     # Act & Assert - Admin
     res_admin = await async_client.delete(
         f"/api/v1/assignments/{assignment_without_submissions.id}",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_admin.status_code == 403

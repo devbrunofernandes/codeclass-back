@@ -22,7 +22,7 @@ async def test_create_classroom_when_called_by_teacher_should_create_successfull
     response = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/classrooms",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -44,7 +44,7 @@ async def test_create_classroom_when_payload_is_invalid_should_return_422(
     response = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/classrooms",
         json=payload,
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
 
     # Assert
@@ -79,7 +79,7 @@ async def test_create_classroom_when_called_by_admin_or_owner_with_teacher_shoul
             "name": "Turma Criada por Admin",
             "teacher_id": str(tenant.teacher.user.id),
         },
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_admin.status_code == 201
     assert res_admin.json()["teacher_id"] == str(tenant.teacher.user.id)
@@ -91,7 +91,7 @@ async def test_create_classroom_when_called_by_admin_or_owner_with_teacher_shoul
             "name": "Turma Criada por Owner",
             "teacher_id": str(tenant.teacher.user.id),
         },
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_owner.status_code == 201
     assert res_owner.json()["teacher_id"] == str(tenant.teacher.user.id)
@@ -108,7 +108,7 @@ async def test_create_classroom_when_teacher_role_is_invalid_should_return_400(
             "name": "Turma Docente Invalido",
             "teacher_id": str(tenant.student.user.id),
         },
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
 
     # Assert
@@ -124,7 +124,7 @@ async def test_create_classroom_when_student_attempts_creation_should_return_403
     res = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/classrooms",
         json={"name": "Turma Aluno"},
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
 
     # Assert
@@ -133,23 +133,16 @@ async def test_create_classroom_when_student_attempts_creation_should_return_403
 
 @pytest.mark.asyncio
 async def test_get_my_classrooms_strategy_pattern_should_return_correct_roles(
-    async_client: AsyncClient, tenant: TenantContext, db_session: AsyncSession
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    create_classroom,
+    db_session: AsyncSession,
 ):
-    # Arrange: Turma 1 com professor 1 e aluno
-    c1 = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Algoritmos 1",
+    # Arrange: Turma 1 com professor 1 e aluno via factory
+    c1 = await create_classroom(tenant, name="Algoritmos 1")
+    await create_classroom(
+        tenant, teacher_id=tenant.other_teacher.user.id, name="Algoritmos 2"
     )
-    c2 = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.other_teacher.user.id,
-        name="Algoritmos 2",
-    )
-    db_session.add_all([c1, c2])
-    await db_session.flush()
 
     enrollment = ClassroomStudent(classroom_id=c1.id, student_id=tenant.student.user.id)
     db_session.add(enrollment)
@@ -158,7 +151,7 @@ async def test_get_my_classrooms_strategy_pattern_should_return_correct_roles(
     # Act & Assert: Professor 1 (Strategy Pattern -> role_in_class == teacher)
     res_t1 = await async_client.get(
         "/api/v1/classrooms/my-classes",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_t1.status_code == 200
     classes_t1 = res_t1.json()
@@ -169,7 +162,7 @@ async def test_get_my_classrooms_strategy_pattern_should_return_correct_roles(
     # Act & Assert: Aluno (Strategy Pattern -> role_in_class == student)
     res_s = await async_client.get(
         "/api/v1/classrooms/my-classes",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_s.status_code == 200
     classes_s = res_s.json()
@@ -180,7 +173,7 @@ async def test_get_my_classrooms_strategy_pattern_should_return_correct_roles(
     # Act & Assert: Owner (Strategy Pattern -> role_in_class == owner para todas as turmas)
     res_owner = await async_client.get(
         "/api/v1/classrooms/my-classes",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_owner.status_code == 200
     classes_owner = res_owner.json()
@@ -190,7 +183,7 @@ async def test_get_my_classrooms_strategy_pattern_should_return_correct_roles(
     # Act & Assert: Admin (Strategy Pattern -> role_in_class == admin para todas as turmas)
     res_admin = await async_client.get(
         "/api/v1/classrooms/my-classes",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
     )
     assert res_admin.status_code == 200
     classes_admin = res_admin.json()
@@ -203,44 +196,29 @@ async def test_get_classroom_details_rbac_and_isolation(
     async_client: AsyncClient,
     tenant: TenantContext,
     create_tenant,
-    db_session: AsyncSession,
+    classroom_with_student: Classroom,
 ):
-    # Arrange
-    classroom = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Compiladores",
-        description="Construção de Compiladores",
-    )
-    db_session.add(classroom)
-    await db_session.flush()
-
-    enrollment = ClassroomStudent(
-        classroom_id=classroom.id, student_id=tenant.student.user.id
-    )
-    db_session.add(enrollment)
-    await db_session.commit()
+    classroom = classroom_with_student
 
     # Act & Assert: Professor da turma acessa com sucesso (200)
     res_t = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_t.status_code == 200
-    assert res_t.json()["name"] == "Compiladores"
+    assert res_t.json()["name"] == classroom.name
 
     # Act & Assert: Aluno matriculado acessa com sucesso (200)
     res_s = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_s.status_code == 200
 
     # Act & Assert: Aluno não matriculado tem acesso negado (403)
     res_unrolled = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}",
-        headers={"Authorization": f"Bearer {tenant.other_student.token}"},
+        headers=tenant.other_student.auth_headers,
     )
     assert res_unrolled.status_code == 403
 
@@ -248,30 +226,21 @@ async def test_get_classroom_details_rbac_and_isolation(
     other_tenant = await create_tenant("Outra Org")
     res_cross_org = await async_client.get(
         f"/api/v1/classrooms/{classroom.id}",
-        headers={"Authorization": f"Bearer {other_tenant.owner.token}"},
+        headers=other_tenant.owner.auth_headers,
     )
     assert res_cross_org.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_update_classroom_rbac_permissions(
-    async_client: AsyncClient, tenant: TenantContext, db_session: AsyncSession
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
 ):
-    # Arrange
-    classroom = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Sistemas Operacionais",
-    )
-    db_session.add(classroom)
-    await db_session.commit()
 
     # Act & Assert: Outro docente não pode editar -> 403
     res_fail = await async_client.patch(
         f"/api/v1/classrooms/{classroom.id}",
         json={"name": "Tentativa Invalida"},
-        headers={"Authorization": f"Bearer {tenant.other_teacher.token}"},
+        headers=tenant.other_teacher.auth_headers,
     )
     assert res_fail.status_code == 403
 
@@ -279,7 +248,7 @@ async def test_update_classroom_rbac_permissions(
     res_fail_student = await async_client.patch(
         f"/api/v1/classrooms/{classroom.id}",
         json={"name": "Tentativa Aluno"},
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_fail_student.status_code == 403
 
@@ -287,7 +256,7 @@ async def test_update_classroom_rbac_permissions(
     res_ok = await async_client.patch(
         f"/api/v1/classrooms/{classroom.id}",
         json={"name": "Nome Atualizado pelo Docente"},
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_ok.status_code == 200
     assert res_ok.json()["name"] == "Nome Atualizado pelo Docente"
@@ -296,7 +265,7 @@ async def test_update_classroom_rbac_permissions(
     res_owner = await async_client.patch(
         f"/api/v1/classrooms/{classroom.id}",
         json={"name": "Nome Atualizado pelo Owner"},
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_owner.status_code == 200
     assert res_owner.json()["name"] == "Nome Atualizado pelo Owner"
@@ -304,56 +273,44 @@ async def test_update_classroom_rbac_permissions(
 
 @pytest.mark.asyncio
 async def test_delete_classroom_rbac_permissions(
-    async_client: AsyncClient, tenant: TenantContext, db_session: AsyncSession
+    async_client: AsyncClient, tenant: TenantContext, create_classroom
 ):
-    # Arrange
-    c1 = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Para Deletar",
-    )
-    c2 = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Para Deletar pelo Owner",
-    )
-    db_session.add_all([c1, c2])
-    await db_session.commit()
+    # Arrange via factory
+    c1 = await create_classroom(tenant, name="Para Deletar")
+    c2 = await create_classroom(tenant, name="Para Deletar pelo Owner")
 
     # Act & Assert: Aluno não pode excluir -> 403
     res_fail = await async_client.delete(
         f"/api/v1/classrooms/{c1.id}",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     assert res_fail.status_code == 403
 
     # Act & Assert: Professor da turma exclui -> 204
     res_t = await async_client.delete(
         f"/api/v1/classrooms/{c1.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_t.status_code == 204
 
     # Act & Assert: Owner exclui com permissões totais -> 204
     res_o = await async_client.delete(
         f"/api/v1/classrooms/{c2.id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_o.status_code == 204
 
 
 @pytest.mark.asyncio
 async def test_classroom_edge_cases_and_not_found_should_return_404(
-    async_client: AsyncClient, tenant: TenantContext, db_session: AsyncSession
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
 ):
     random_id = uuid.uuid4()
 
     # 1. Buscar detalhes de sala inexistente -> 404
     res_not_found = await async_client.get(
         f"/api/v1/classrooms/{random_id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_not_found.status_code == 404
 
@@ -361,36 +318,27 @@ async def test_classroom_edge_cases_and_not_found_should_return_404(
     res_patch_nf = await async_client.patch(
         f"/api/v1/classrooms/{random_id}",
         json={"name": "Novo Nome"},
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_patch_nf.status_code == 404
 
     # 3. Deletar sala inexistente -> 404
     res_del_nf = await async_client.delete(
         f"/api/v1/classrooms/{random_id}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_del_nf.status_code == 404
 
-    # 4. Criar sala e testar desmatrícula de aluno não matriculado -> 404
-    c = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Turma Borda",
-    )
-    db_session.add(c)
-    await db_session.commit()
-
+    # 4. Testar desmatrícula de aluno não matriculado -> 404
     res_unenroll_nf = await async_client.delete(
-        f"/api/v1/classrooms/{c.id}/students/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        f"/api/v1/classrooms/{classroom.id}/students/{tenant.student.user.id}",
+        headers=tenant.teacher.auth_headers,
     )
     assert res_unenroll_nf.status_code == 404
 
     # 5. Desmatrícula em sala inexistente -> 404
     res_unenroll_cls_nf = await async_client.delete(
         f"/api/v1/classrooms/{random_id}/students/{tenant.student.user.id}",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
     )
     assert res_unenroll_cls_nf.status_code == 404

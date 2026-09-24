@@ -33,7 +33,7 @@ async def test_add_member_rbac_permissions(
     # Act & Assert: 1. Owner cadastra um Admin -> 201
     res_admin = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={
             "email": admin_email,
             "full_name": "New Admin",
@@ -48,7 +48,7 @@ async def test_add_member_rbac_permissions(
     sub_admin_id = uuid.uuid4()
     res_fail = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
         json={
             "email": f"sub_{sub_admin_id.hex[:6]}@example.com",
             "full_name": "Sub Admin",
@@ -74,7 +74,7 @@ async def test_add_member_rbac_permissions(
     )
     res_t = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
         json={
             "email": new_t_email,
             "full_name": "Novo Professor",
@@ -87,7 +87,7 @@ async def test_add_member_rbac_permissions(
     # Act & Assert: 4. Professor tenta cadastrar Aluno -> 403 (apenas Admin ou Owner podem)
     res_t_fail = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+        headers=tenant.teacher.auth_headers,
         json={
             "email": "student_tentativa@example.com",
             "full_name": "Tentativa Aluno",
@@ -105,7 +105,7 @@ async def test_add_member_when_email_is_invalid_should_return_422(
     # Act: Envia e-mail em formato inválido
     res = await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={
             "email": "invalid-email-format",
             "full_name": "Nome Valido",
@@ -138,7 +138,7 @@ async def test_list_members_with_filters_search_and_pagination(
     )
     await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={
             "email": t_email,
             "full_name": "Professor Filtro",
@@ -162,7 +162,7 @@ async def test_list_members_with_filters_search_and_pagination(
     )
     await async_client.post(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={
             "email": s_email,
             "full_name": "Aluno Desativado",
@@ -173,14 +173,14 @@ async def test_list_members_with_filters_search_and_pagination(
     # Desativa o aluno
     await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{s_id}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
 
     # Act & Assert: 1. Filtro por papel (role=teacher)
     res_role = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members?role=teacher",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_role.status_code == 200
     teachers = res_role.json()
@@ -190,7 +190,7 @@ async def test_list_members_with_filters_search_and_pagination(
     # Act & Assert: 2. Filtro por status (is_active=false)
     res_inactive = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members?is_active=false",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_inactive.status_code == 200
     inactives = res_inactive.json()
@@ -199,7 +199,7 @@ async def test_list_members_with_filters_search_and_pagination(
     # Act & Assert: 3. Busca por texto (search por nome)
     res_search_name = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members?search=filtro",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_search_name.status_code == 200
     assert any(m["user_id"] == str(t_id) for m in res_search_name.json())
@@ -207,7 +207,7 @@ async def test_list_members_with_filters_search_and_pagination(
     # Act & Assert: 4. Busca por texto (search por email)
     res_search_email = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members?search={s_email}",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_search_email.status_code == 200
     assert len(res_search_email.json()) == 1
@@ -216,7 +216,7 @@ async def test_list_members_with_filters_search_and_pagination(
     # Act & Assert: 5. Paginação (limit e offset)
     res_paged = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members?limit=1&offset=0",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
     )
     assert res_paged.status_code == 200
     assert len(res_paged.json()) == 1
@@ -229,7 +229,7 @@ async def test_update_member_role_and_status_lifecycle(
     # Act: Owner promove aluno para professor
     put_role = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/role",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"role": OrgRole.TEACHER.value},
     )
     # Assert
@@ -239,7 +239,7 @@ async def test_update_member_role_and_status_lifecycle(
     # Act: Owner desativa o membro
     patch_status = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
     # Assert
@@ -249,7 +249,7 @@ async def test_update_member_role_and_status_lifecycle(
     # Act: Membro desativado tenta acessar rota -> 403
     access_res = await async_client.get(
         f"/api/v1/orgs/{tenant.org.id}/members",
-        headers={"Authorization": f"Bearer {tenant.student.token}"},
+        headers=tenant.student.auth_headers,
     )
     # Assert
     assert access_res.status_code == 403
@@ -262,7 +262,7 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     # 1. Tentativa de auto-desativação do Owner -> 400
     res_self = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.owner.user.id}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
     assert res_self.status_code == 400
@@ -271,7 +271,7 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     # 2. Admin tenta desativar o Owner -> 400
     res_owner_deact = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.owner.user.id}/status",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
         json={"is_active": False},
     )
     assert res_owner_deact.status_code == 400
@@ -280,7 +280,7 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     # 3. Admin tenta alterar papel de outro Admin -> 403
     res_adm_demote = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.admin.user.id}/role",
-        headers={"Authorization": f"Bearer {tenant.admin.token}"},
+        headers=tenant.admin.auth_headers,
         json={"role": OrgRole.TEACHER.value},
     )
     assert res_adm_demote.status_code == 403
@@ -288,7 +288,7 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     # 4. Tentativa de atribuir role=owner via endpoint de papel -> 400
     res_put_owner = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/role",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"role": OrgRole.OWNER.value},
     )
     assert res_put_owner.status_code == 400
@@ -296,7 +296,7 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     # 5. Tentativa de alterar papel do próprio Owner -> 400
     res_mod_owner = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/members/{tenant.owner.user.id}/role",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"role": OrgRole.TEACHER.value},
     )
     assert res_mod_owner.status_code == 400
@@ -305,14 +305,14 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
     non_existent = uuid.uuid4()
     res_nf_role = await async_client.put(
         f"/api/v1/orgs/{tenant.org.id}/members/{non_existent}/role",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"role": OrgRole.TEACHER.value},
     )
     assert res_nf_role.status_code == 404
 
     res_nf_status = await async_client.patch(
         f"/api/v1/orgs/{tenant.org.id}/members/{non_existent}/status",
-        headers={"Authorization": f"Bearer {tenant.owner.token}"},
+        headers=tenant.owner.auth_headers,
         json={"is_active": False},
     )
     assert res_nf_status.status_code == 404
