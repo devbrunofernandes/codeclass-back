@@ -15,6 +15,7 @@ from app.core.exceptions import (
     NotFoundException,
     UnauthorizedException,
 )
+from app.models.assignment import Assignment
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
@@ -175,10 +176,80 @@ async def get_classroom_context(
     )
 
 
+@dataclass
+class AssignmentContext:
+    assignment: Assignment
+    classroom: Classroom
+    current_member: OrganizationMember
+    is_owner: bool
+    is_admin: bool
+    is_teacher_of_class: bool
+    is_enrolled_student: bool
+
+    @property
+    def can_view(self) -> bool:
+        return (
+            self.is_owner
+            or self.is_admin
+            or self.is_teacher_of_class
+            or self.is_enrolled_student
+        )
+
+    @property
+    def can_manage(self) -> bool:
+        return self.is_teacher_of_class
+
+
+async def get_assignment_context(
+    assignment_id: UUID,
+    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AssignmentContext:
+    """Carrega a atividade e valida isolamento de tenant e privilégios contextuais."""
+    stmt = (
+        select(Assignment)
+        .options(selectinload(Assignment.classroom))
+        .where(Assignment.id == assignment_id)
+    )
+    result = await db.execute(stmt)
+    assignment = result.scalar_one_or_none()
+
+    if assignment is None:
+        raise NotFoundException("Atividade não encontrada.")
+
+    classroom = assignment.classroom
+    if classroom.organization_id != current_member.organization_id:
+        raise ForbiddenException("Acesso negado a recursos de outra organização.")
+
+    is_owner = current_member.role == OrgRole.OWNER
+    is_admin = current_member.role == OrgRole.ADMIN
+    is_teacher_of_class = classroom.teacher_id == current_member.user_id
+
+    # Checa se o usuário é aluno matriculado na turma da atividade
+    enrolled_stmt = select(ClassroomStudent).where(
+        ClassroomStudent.classroom_id == classroom.id,
+        ClassroomStudent.student_id == current_member.user_id,
+    )
+    enrolled_res = await db.execute(enrolled_stmt)
+    is_enrolled_student = enrolled_res.scalar_one_or_none() is not None
+
+    return AssignmentContext(
+        assignment=assignment,
+        classroom=classroom,
+        current_member=current_member,
+        is_owner=is_owner,
+        is_admin=is_admin,
+        is_teacher_of_class=is_teacher_of_class,
+        is_enrolled_student=is_enrolled_student,
+    )
+
+
 __all__ = [
+    "AssignmentContext",
     "AsyncGenerator",
     "AsyncSession",
     "ClassroomContext",
+    "get_assignment_context",
     "get_classroom_context",
     "get_current_active_member",
     "get_current_user",

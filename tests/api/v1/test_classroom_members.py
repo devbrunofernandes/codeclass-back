@@ -1,25 +1,9 @@
-import uuid
-
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.classroom import Classroom, ClassroomStudent
 from tests.conftest import TenantContext
-
-
-@pytest.fixture
-async def classroom(tenant: TenantContext, db_session: AsyncSession) -> Classroom:
-    """Fixture que cria uma turma vinculada ao professor do tenant."""
-    c = Classroom(
-        id=uuid.uuid4(),
-        organization_id=tenant.org.id,
-        teacher_id=tenant.teacher.user.id,
-        name="Turma de Algoritmos",
-    )
-    db_session.add(c)
-    await db_session.commit()
-    return c
 
 
 @pytest.mark.asyncio

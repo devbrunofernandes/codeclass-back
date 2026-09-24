@@ -12,8 +12,16 @@ import app.models
 from app.core.config import settings
 from app.core.database import Base, async_session_maker, engine
 from app.main import app
-from app.models.enums import OrgRole
+from app.models.assignment import Assignment
+from app.models.classroom import Classroom, ClassroomStudent
+from app.models.enums import (
+    AssignmentType,
+    OrgRole,
+    ReleasePolicyType,
+    SubmissionStatus,
+)
 from app.models.organization import Organization, OrganizationMember
+from app.models.submission import Submission
 from app.models.user import User
 
 
@@ -249,3 +257,111 @@ async def tenant(
 ) -> TenantContext:
     """Fixture padrão que fornece um tenant completo pronto para uso imediato."""
     return await create_tenant(None)
+
+
+@pytest.fixture
+async def classroom(tenant: TenantContext, db_session: AsyncSession) -> Classroom:
+    """Fixture que cria uma turma vinculada ao professor do tenant."""
+    c = Classroom(
+        id=uuid.uuid4(),
+        organization_id=tenant.org.id,
+        teacher_id=tenant.teacher.user.id,
+        name="Turma de Algoritmos e Estruturas de Dados",
+    )
+    db_session.add(c)
+    await db_session.commit()
+    return c
+
+
+@pytest.fixture
+async def enrolled_student(
+    tenant: TenantContext, classroom: Classroom, db_session: AsyncSession
+) -> ClassroomStudent:
+    """Fixture que matricula o aluno principal do tenant na turma."""
+    cs = ClassroomStudent(
+        classroom_id=classroom.id,
+        student_id=tenant.student.user.id,
+    )
+    db_session.add(cs)
+    await db_session.commit()
+    return cs
+
+
+@pytest.fixture
+async def assignment_without_submissions(
+    tenant: TenantContext, classroom: Classroom, db_session: AsyncSession
+) -> Assignment:
+    """Fixture que instancia uma tarefa limpa sem submissões vinculadas."""
+    a = Assignment(
+        id=uuid.uuid4(),
+        classroom_id=classroom.id,
+        title="Busca Binária",
+        description="Implemente o algoritmo de busca binária",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=datetime.now(UTC) + timedelta(days=7),
+        config={
+            "languages": [
+                {
+                    "name": "python3",
+                    "starter_code": "def binary_search(arr, target):\n    pass\n",
+                }
+            ],
+            "time_limit_sec": 2.0,
+            "memory_limit_mb": 128,
+            "rubric": "Avaliar tratamento para elemento não encontrado.",
+            "test_cases": [
+                {"id": 1, "input": "[1, 2, 3] 2\n", "expected_output": "1\n"}
+            ],
+        },
+    )
+    db_session.add(a)
+    await db_session.commit()
+    return a
+
+
+@pytest.fixture
+async def assignment_with_submissions(
+    tenant: TenantContext,
+    classroom: Classroom,
+    enrolled_student: ClassroomStudent,
+    db_session: AsyncSession,
+) -> Assignment:
+    """Fixture que instancia uma tarefa com submissão ativa de aluno vinculada."""
+    a = Assignment(
+        id=uuid.uuid4(),
+        classroom_id=classroom.id,
+        title="Questionário de Grafos",
+        description="Questões sobre busca em largura e profundidade",
+        type=AssignmentType.QUESTIONNAIRE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=datetime.now(UTC) + timedelta(days=3),
+        config={
+            "questions": [
+                {
+                    "id": 1,
+                    "type": "choice",
+                    "points": 5.0,
+                    "statement": "Qual estrutura de dados é usada na BFS?",
+                    "options": [
+                        {"id": "a", "text": "Pilha"},
+                        {"id": "b", "text": "Fila"},
+                    ],
+                    "correct_option_id": "b",
+                }
+            ]
+        },
+    )
+    db_session.add(a)
+    await db_session.flush()
+
+    sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=a.id,
+        student_id=tenant.student.user.id,
+        content={"answers": [{"question_id": 1, "selected_option_id": "b"}]},
+        status=SubmissionStatus.PENDING,
+    )
+    db_session.add(sub)
+    await db_session.commit()
+    return a
