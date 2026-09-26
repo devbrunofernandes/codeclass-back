@@ -9,7 +9,11 @@ from app.models.enums import (
     SubmissionStatus,
 )
 from app.models.organization import Organization, OrganizationMember
-from app.models.submission import Submission, SubmissionEvaluation
+from app.models.submission import (
+    Submission,
+    SubmissionAiInsight,
+    SubmissionEvaluation,
+)
 from app.models.user import User
 
 __all__ = [
@@ -24,6 +28,7 @@ __all__ = [
     "OrganizationMember",
     "ReleasePolicyType",
     "Submission",
+    "SubmissionAiInsight",
     "SubmissionEvaluation",
     "SubmissionStatus",
     "User",

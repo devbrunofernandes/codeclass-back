@@ -1,0 +1,63 @@
+from datetime import datetime
+from decimal import Decimal
+from typing import Annotated, Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.models.enums import SubmissionStatus
+
+
+class CodeSubmissionContent(BaseModel):
+    language: str = Field(min_length=1, max_length=50)
+    code: str = Field(min_length=1)
+
+
+class ChoiceAnswerContent(BaseModel):
+    question_id: int = Field(ge=1)
+    selected_option_id: str = Field(min_length=1, max_length=50)
+
+
+class OpenAnswerContent(BaseModel):
+    question_id: int = Field(ge=1)
+    text_answer: str = Field(min_length=1)
+
+
+AnswerItemContent = Annotated[
+    ChoiceAnswerContent | OpenAnswerContent,
+    Field(union_mode="left_to_right"),
+]
+
+
+class QuestionnaireSubmissionContent(BaseModel):
+    answers: list[AnswerItemContent] = Field(min_length=1)
+
+    @field_validator("answers")
+    @classmethod
+    def validate_unique_question_ids(
+        cls, answers: list[ChoiceAnswerContent | OpenAnswerContent]
+    ) -> list[ChoiceAnswerContent | OpenAnswerContent]:
+        seen_ids = set()
+        for ans in answers:
+            if ans.question_id in seen_ids:
+                raise ValueError(
+                    f"A questão com ID {ans.question_id} foi respondida mais de uma vez."
+                )
+            seen_ids.add(ans.question_id)
+        return answers
+
+
+class SubmissionCreateRequest(BaseModel):
+    content: CodeSubmissionContent | QuestionnaireSubmissionContent
+
+
+class SubmissionStudentResponse(BaseModel):
+    id: UUID
+    assignment_id: UUID
+    student_id: UUID
+    content: dict[str, Any]
+    grade: Decimal | None = None
+    status: SubmissionStatus
+    submitted_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

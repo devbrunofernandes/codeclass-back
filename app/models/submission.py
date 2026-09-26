@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -46,11 +47,6 @@ class Submission(Base):
     content: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-    )
-    ai_insights: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB,
-        nullable=True,
-        default=None,
     )
     grade: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
@@ -100,9 +96,96 @@ class Submission(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    ai_insight: Mapped[SubmissionAiInsight | None] = relationship(
+        "SubmissionAiInsight",
+        back_populates="submission",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def __repr__(self) -> str:
         return f"<Submission id={self.id} assignment_id={self.assignment_id} student_id={self.student_id} status={self.status.value}>"
+
+
+class SubmissionAiInsight(Base):
+    __tablename__ = "submission_ai_insights"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("submissions.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="in_progress",
+        server_default=text("'in_progress'"),
+        nullable=False,
+    )
+    suggested_grade: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        default=None,
+    )
+    max_grade: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        default=None,
+    )
+    reasoning: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+    )
+    strengths: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        nullable=False,
+    )
+    improvements: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        nullable=False,
+    )
+    item_insights: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+    )
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    submission: Mapped[Submission] = relationship(
+        "Submission",
+        back_populates="ai_insight",
+    )
+
+    def __repr__(self) -> str:
+        return f"<SubmissionAiInsight id={self.id} submission_id={self.submission_id} status={self.status}>"
 
 
 class SubmissionEvaluation(Base):

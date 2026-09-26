@@ -6,6 +6,7 @@ from app.api.v1 import (
     classrooms,
     health,
     organizations,
+    submissions,
     users,
 )
 
@@ -17,3 +18,4 @@ api_router.include_router(organizations.router, prefix="/orgs", tags=["Organizat
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(classrooms.router, tags=["Classrooms"])
 api_router.include_router(assignments.router, tags=["Assignments"])
+api_router.include_router(submissions.router, tags=["Submissions"])
