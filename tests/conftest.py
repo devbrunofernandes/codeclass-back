@@ -13,6 +13,7 @@ pytest_plugins = [
     "tests.fixtures.classrooms",
     "tests.fixtures.assignments",
     "tests.fixtures.submissions",
+    "tests.fixtures.chat",
     "tests.fixtures.integration",
 ]
 
