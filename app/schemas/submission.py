@@ -61,3 +61,38 @@ class SubmissionStudentResponse(BaseModel):
     submitted_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AiItemInsightSchema(BaseModel):
+    question_id: int = Field(ge=1)
+    suggested_grade: float = Field(ge=0.0)
+    max_grade: float = Field(ge=0.0)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    reasoning: str
+
+
+class AiInsightResult(BaseModel):
+    suggested_grade: float = Field(ge=0.0)
+    max_grade: float = Field(ge=0.0)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    reasoning: str
+    item_insights: list[AiItemInsightSchema] | None = None
+
+
+class SubmissionAiInsightResponse(BaseModel):
+    id: UUID
+    submission_id: UUID
+    status: str
+    suggested_grade: Decimal | None = None
+    max_grade: Decimal | None = None
+    reasoning: str | None = None
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    item_insights: list[dict[str, Any]] | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

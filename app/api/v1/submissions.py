@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AssignmentContext, get_assignment_context, get_db
@@ -24,6 +24,7 @@ async def submit_assignment(
     request: SubmissionCreateRequest,
     context: Annotated[AssignmentContext, Depends(get_assignment_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    background_tasks: BackgroundTasks,
 ) -> SubmissionStudentResponse:
     if not context.is_enrolled_student:
         raise ForbiddenException(
@@ -31,7 +32,11 @@ async def submit_assignment(
         )
 
     sub = await submission_service.submit_assignment(
-        context.assignment, context.current_member.user_id, request, db
+        context.assignment,
+        context.current_member.user_id,
+        request,
+        db,
+        background_tasks=background_tasks,
     )
     return SubmissionStudentResponse.model_validate(sub)
 

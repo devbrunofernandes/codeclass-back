@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     # External Integrations
     JUDGE0_API_URL: str = "https://judge0-ce.p.rapidapi.com"
     JUDGE0_API_KEY: str = ""
-    GEMINI_API_KEY: str = ""
+
+    # External Integrations - AI Engine
+    AI_PROVIDER: str = "gemini"
+    AI_API_KEY: str = ""
+    AI_MODEL: str = "gemini-3.5-flash-lite"
 
     model_config = SettingsConfigDict(
         env_file=".env",

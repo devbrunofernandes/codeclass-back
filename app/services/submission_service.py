@@ -1,12 +1,16 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from fastapi import BackgroundTasks
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
+from app.core.database import async_session_maker
 from app.core.exceptions import (
     BadRequestException,
     ConflictException,
@@ -14,12 +18,19 @@ from app.core.exceptions import (
 )
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
-from app.models.submission import Submission, SubmissionEvaluation
+from app.models.submission import (
+    Submission,
+    SubmissionAiInsight,
+    SubmissionEvaluation,
+)
 from app.schemas.submission import (
     CodeSubmissionContent,
     QuestionnaireSubmissionContent,
     SubmissionCreateRequest,
 )
+from app.services.ai_service import ai_service
+
+logger = logging.getLogger(__name__)
 
 
 class SubmissionService:
@@ -73,15 +84,20 @@ class SubmissionService:
         student_id: uuid.UUID,
         request: SubmissionCreateRequest,
         db: AsyncSession,
+        background_tasks: BackgroundTasks | None = None,
     ) -> Submission:
         # 1. Valida se o prazo já expirou
         if assignment.deadline and datetime.now(UTC) > assignment.deadline:
             raise BadRequestException("Prazo de entrega expirado.")
 
         # 2. Verifica submissão existente
-        stmt = select(Submission).where(
-            Submission.assignment_id == assignment.id,
-            Submission.student_id == student_id,
+        stmt = (
+            select(Submission)
+            .options(selectinload(Submission.ai_insight))
+            .where(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == student_id,
+            )
         )
         result = await db.execute(stmt)
         existing_sub = result.scalar_one_or_none()
@@ -95,6 +111,7 @@ class SubmissionService:
         target_status = SubmissionStatus.PENDING
         calculated_grade: Decimal | None = None
         evaluation_record: SubmissionEvaluation | None = None
+        needs_ai_task = False
 
         # 3. Validação e processamento de acordo com o tipo da tarefa
         if assignment.type == AssignmentType.CODE:
@@ -108,7 +125,19 @@ class SubmissionService:
             self.validate_code_content(
                 request.content.language, request.content.code, allowed_langs
             )
-            target_status = SubmissionStatus.PENDING
+
+            # Idempotência no reenvio de draft com código idêntico
+            if (
+                existing_sub
+                and existing_sub.ai_insight
+                and existing_sub.ai_insight.status == "completed"
+                and existing_sub.content == content_data
+            ):
+                target_status = SubmissionStatus.AWAITING_REVIEW
+                needs_ai_task = False
+            else:
+                target_status = SubmissionStatus.PENDING
+                needs_ai_task = True
 
         elif assignment.type == AssignmentType.QUESTIONNAIRE:
             if not isinstance(request.content, QuestionnaireSubmissionContent):
@@ -120,7 +149,7 @@ class SubmissionService:
             is_all_objective = all(q.get("type") == "choice" for q in questions)
 
             if is_all_objective:
-                # Auto-correção determinística de questionário 100% objetivo
+                # Auto-correção determinística de questionário 100% objetivo (zero IA)
                 answers_data: list[dict[str, Any]] = [
                     a.model_dump() for a in request.content.answers
                 ]
@@ -140,8 +169,20 @@ class SubmissionService:
                     general_feedback="Correção automática",
                     detailed_scores=detailed,
                 )
+                needs_ai_task = False
             else:
-                target_status = SubmissionStatus.PENDING
+                # Questionário misto ou dissertativo (requer IA)
+                if (
+                    existing_sub
+                    and existing_sub.ai_insight
+                    and existing_sub.ai_insight.status == "completed"
+                    and existing_sub.content == content_data
+                ):
+                    target_status = SubmissionStatus.AWAITING_REVIEW
+                    needs_ai_task = False
+                else:
+                    target_status = SubmissionStatus.PENDING
+                    needs_ai_task = True
         else:
             raise BadRequestException(
                 f"Tipo de atividade não suportado: {assignment.type}"
@@ -163,6 +204,27 @@ class SubmissionService:
                 grade=calculated_grade,
             )
             db.add(sub)
+
+        # 5. Configuração do registro de ai_insight se necessário
+        if needs_ai_task:
+            if existing_sub and existing_sub.ai_insight:
+                existing_sub.ai_insight.status = "in_progress"
+                existing_sub.ai_insight.error_message = None
+                existing_sub.ai_insight.suggested_grade = None
+                existing_sub.ai_insight.max_grade = None
+                existing_sub.ai_insight.reasoning = None
+                existing_sub.ai_insight.strengths = []
+                existing_sub.ai_insight.improvements = []
+                existing_sub.ai_insight.item_insights = None
+            elif existing_sub:
+                existing_sub.ai_insight = SubmissionAiInsight(
+                    submission_id=existing_sub.id,
+                    status="in_progress",
+                )
+            else:
+                sub.ai_insight = SubmissionAiInsight(
+                    status="in_progress",
+                )
 
         try:
             await db.flush()
@@ -188,7 +250,101 @@ class SubmissionService:
             )
 
         await db.refresh(sub)
+
+        # 6. Agenda worker de IA assíncrona se necessário
+        if needs_ai_task and background_tasks:
+            background_tasks.add_task(self.process_submission_ai_task, sub.id)
+
         return sub
+
+    async def process_submission_ai_task(self, submission_id: uuid.UUID) -> None:
+        """Executa a inferência pedagógica assíncrona com IA em sessão isolada de banco."""
+        async with async_session_maker() as session:
+            try:
+                stmt = (
+                    select(Submission)
+                    .options(
+                        joinedload(Submission.assignment),
+                        joinedload(Submission.ai_insight),
+                    )
+                    .where(Submission.id == submission_id)
+                )
+                result = await session.execute(stmt)
+                sub = result.scalar_one_or_none()
+                if not sub or not sub.assignment:
+                    logger.warning(
+                        "Submissão %s não encontrada para processamento de IA.",
+                        submission_id,
+                    )
+                    return
+
+                if sub.status != SubmissionStatus.PENDING:
+                    logger.info(
+                        "Submissão %s não está no status PENDING (%s), pulando IA.",
+                        submission_id,
+                        sub.status,
+                    )
+                    return
+
+                # Chama AiService para gerar os pareceres e notas
+                insight = await ai_service.evaluate_submission(
+                    assignment=sub.assignment,
+                    submission_content=sub.content,
+                )
+
+                if not sub.ai_insight:
+                    sub.ai_insight = SubmissionAiInsight(submission_id=sub.id)
+                    session.add(sub.ai_insight)
+
+                sub.ai_insight.status = "completed"
+                sub.ai_insight.suggested_grade = Decimal(str(insight.suggested_grade))
+                sub.ai_insight.max_grade = Decimal(str(insight.max_grade))
+                sub.ai_insight.reasoning = insight.reasoning
+                sub.ai_insight.strengths = insight.strengths
+                sub.ai_insight.improvements = insight.improvements
+                sub.ai_insight.item_insights = (
+                    [item.model_dump() for item in insight.item_insights]
+                    if insight.item_insights
+                    else None
+                )
+                sub.ai_insight.error_message = None
+
+                # Transita status para AWAITING_REVIEW (pronto para o professor)
+                sub.status = SubmissionStatus.AWAITING_REVIEW
+                await session.commit()
+                logger.info(
+                    "Processamento de IA concluído para submissão %s.", submission_id
+                )
+
+            except Exception as exc:
+                logger.exception(
+                    "Falha ao processar submissão %s com IA", submission_id
+                )
+                await session.rollback()
+
+                # Resiliência: marca status='failed' e transita submissão para AWAITING_REVIEW (HLD 9.2)
+                try:
+                    stmt = (
+                        select(Submission)
+                        .options(joinedload(Submission.ai_insight))
+                        .where(Submission.id == submission_id)
+                    )
+                    result = await session.execute(stmt)
+                    sub = result.scalar_one_or_none()
+                    if sub:
+                        if not sub.ai_insight:
+                            sub.ai_insight = SubmissionAiInsight(submission_id=sub.id)
+                            session.add(sub.ai_insight)
+                        sub.ai_insight.status = "failed"
+                        sub.ai_insight.error_message = str(exc)
+                        sub.status = SubmissionStatus.AWAITING_REVIEW
+                        await session.commit()
+                except Exception as inner_exc:  # noqa: BLE001
+                    logger.error(
+                        "Falha ao registrar status de fallback para submissão %s: %s",
+                        submission_id,
+                        inner_exc,
+                    )
 
     async def unsubmit_assignment(
         self,

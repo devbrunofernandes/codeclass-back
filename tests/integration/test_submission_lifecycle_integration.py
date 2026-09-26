@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.enums import SubmissionStatus
 from app.models.submission import Submission, SubmissionEvaluation
@@ -74,14 +76,14 @@ async def test_full_submission_lifecycle_code_and_unsubmit_e2e(
     assert "ai_insights" not in submission_data
     assert "ai_insight" not in submission_data
 
-    # 4. Aluno consulta a própria entrega via GET /submissions/me
+    # 4. Aluno consulta a própria entrega via GET /submissions/me (processada pelo worker de IA em background)
     me_res = await async_client.get(
         f"/api/v1/assignments/{assignment_id}/submissions/me",
         headers=tenant.student.auth_headers,
     )
     assert me_res.status_code == 200
     assert me_res.json()["id"] == submission_data["id"]
-    assert me_res.json()["status"] == "pending"
+    assert me_res.json()["status"] == "awaiting_review"
 
     # 5. Tentativa de segunda submissão ativa deve falhar com 409 Conflict (RF21)
     conflict_res = await async_client.post(
@@ -115,14 +117,20 @@ async def test_full_submission_lifecycle_code_and_unsubmit_e2e(
     assert resubmit_data["status"] == "pending"
     assert resubmit_data["content"]["code"] == refined_code
 
-    # 8. Valida o estado diretamente no banco de dados relacional
-    stmt = select(Submission).where(
-        Submission.assignment_id == assignment_id,
-        Submission.student_id == tenant.student.user.id,
+    # 8. Valida o estado diretamente no banco de dados relacional (processado pelo worker de IA em background)
+    stmt = (
+        select(Submission)
+        .options(selectinload(Submission.ai_insight))
+        .where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == tenant.student.user.id,
+        )
     )
     db_sub = (await db_session.execute(stmt)).scalar_one()
-    assert db_sub.status == SubmissionStatus.PENDING
+    assert db_sub.status == SubmissionStatus.AWAITING_REVIEW
     assert db_sub.content["code"] == refined_code
+    assert db_sub.ai_insight is not None
+    assert db_sub.ai_insight.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -228,3 +236,163 @@ async def test_full_objective_questionnaire_auto_grading_lifecycle_e2e(
         "publicada" in unsubmit_res.json()["detail"].lower()
         or "avaliada" in unsubmit_res.json()["detail"].lower()
     )
+
+
+@pytest.mark.asyncio
+async def test_ai_background_processing_failure_fallback_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    db_session: AsyncSession,
+    mock_ai_service: AsyncMock,
+):
+    """Jornada E2E de resiliência: falha do Gemini não congela a submissão em PENDING,
+
+    gravando ai_insight com status='failed' e transitando a entrega para AWAITING_REVIEW (HLD 9.2).
+    """
+    # 1. Arrange: Simula falha catastrófica da API do Gemini (timeout/rate limit)
+    mock_ai_service.side_effect = RuntimeError("Google Gemini API timeout error (504)")
+
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma de Resiliência IA"},
+        headers=tenant.teacher.auth_headers,
+    )
+    classroom_id = class_res.json()["id"]
+
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    assignment_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Merge Sort Resiliente",
+            "description": "Implemente merge sort",
+            "type": "code",
+            "release_policy": "on_review",
+            "config": {
+                "languages": [{"name": "python3"}],
+                "max_grade": 10.0,
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assignment_id = assignment_res.json()["id"]
+
+    # 2. Aluno submete o código
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={
+            "content": {
+                "language": "python3",
+                "code": "def mergesort(arr): return sorted(arr)",
+            }
+        },
+        headers=tenant.student.auth_headers,
+    )
+    assert submit_res.status_code == 201
+    assert submit_res.json()["status"] == "pending"
+
+    # 3. Valida no banco que a resiliência funcionou: transita para awaiting_review com status='failed'
+    stmt = (
+        select(Submission)
+        .options(selectinload(Submission.ai_insight))
+        .where(
+            Submission.assignment_id == assignment_id,
+            Submission.student_id == tenant.student.user.id,
+        )
+    )
+    db_sub = (await db_session.execute(stmt)).scalar_one()
+    assert db_sub.status == SubmissionStatus.AWAITING_REVIEW
+    assert db_sub.ai_insight is not None
+    assert db_sub.ai_insight.status == "failed"
+    assert "timeout error" in (db_sub.ai_insight.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_draft_resubmission_idempotency_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    db_session: AsyncSession,
+    mock_ai_service: AsyncMock,
+):
+    """Jornada E2E de idempotência: reenvio de rascunho com código idêntico NÃO chama a IA novamente.
+
+    Reenvio com código alterado aciona nova inferência.
+    """
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma de Idempotência"},
+        headers=tenant.teacher.auth_headers,
+    )
+    classroom_id = class_res.json()["id"]
+
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    assignment_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Quick Sort Idempotente",
+            "description": "Implemente quicksort",
+            "type": "code",
+            "release_policy": "on_review",
+            "config": {
+                "languages": [{"name": "python3"}],
+                "max_grade": 10.0,
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assignment_id = assignment_res.json()["id"]
+
+    code = "def quicksort(arr): return arr"
+
+    # 1. Envio inicial
+    res1 = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": code}},
+        headers=tenant.student.auth_headers,
+    )
+    assert res1.status_code == 201
+    assert mock_ai_service.call_count == 1
+
+    # 2. Desfaz entrega -> DRAFT
+    unsubmit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+    assert unsubmit_res.status_code == 200
+    assert unsubmit_res.json()["status"] == "draft"
+
+    # 3. Reenvia exatamente o mesmo código -> NÃO deve chamar a IA (reaproveita insight anterior)
+    res2 = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": code}},
+        headers=tenant.student.auth_headers,
+    )
+    assert res2.status_code == 201
+    assert res2.json()["status"] == "awaiting_review"
+    assert mock_ai_service.call_count == 1  # Continua 1! Zero chamadas redundantes
+
+    # 4. Desfaz entrega novamente
+    await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+
+    # 5. Reenvia código MODIFICADO -> Deve disparar nova análise de IA
+    new_code = "def quicksort(arr): return sorted(arr)"
+    res3 = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": new_code}},
+        headers=tenant.student.auth_headers,
+    )
+    assert res3.status_code == 201
+    assert res3.json()["status"] == "pending"
+    assert mock_ai_service.call_count == 2  # Disparou nova inferência!

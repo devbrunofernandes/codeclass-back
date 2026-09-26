@@ -530,3 +530,113 @@ async def test_submit_questionnaire_payload_to_code_assignment_should_return_400
     )
     assert response.status_code == 400
     assert "código" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_mixed_questionnaire_should_return_201_pending(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    mixed_questionnaire_assignment: Assignment,
+):
+    payload = {
+        "content": {
+            "answers": [
+                {"question_id": 1, "selected_option_id": "b"},
+                {
+                    "question_id": 2,
+                    "text_answer": "Usa listas encadeadas em cada posição para colisões.",
+                },
+            ]
+        }
+    }
+    response = await async_client.post(
+        f"/api/v1/assignments/{mixed_questionnaire_assignment.id}/submissions",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "pending"
+    assert data["grade"] is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_resubmission_when_identical_should_return_201_awaiting_review(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    payload = {
+        "content": {
+            "language": "python3",
+            "code": "def solution(): return 42\n",
+        }
+    }
+    # 1. Envio inicial -> 201 pending
+    res1 = await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert res1.status_code == 201
+
+    # 2. Desfaz entrega -> 200 draft
+    unsub_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+    assert unsub_res.status_code == 200
+    assert unsub_res.json()["status"] == "draft"
+
+    # 3. Reenvio com conteúdo IDÊNTICO -> 201 awaiting_review direto (zero chamada à IA)
+    res2 = await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert res2.status_code == 201
+    assert res2.json()["status"] == "awaiting_review"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_resubmission_when_modified_should_return_201_pending(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    initial_payload = {
+        "content": {
+            "language": "python3",
+            "code": "def solution(): return 1\n",
+        }
+    }
+    # 1. Envio inicial
+    await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions",
+        json=initial_payload,
+        headers=tenant.student.auth_headers,
+    )
+
+    # 2. Desfaz entrega -> draft
+    await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+
+    # 3. Reenvio com conteúdo MODIFICADO -> 201 pending (aciona nova inferência)
+    modified_payload = {
+        "content": {
+            "language": "python3",
+            "code": "def solution(): return 2\n",
+        }
+    }
+    res = await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions",
+        json=modified_payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert res.status_code == 201
+    assert res.json()["status"] == "pending"
