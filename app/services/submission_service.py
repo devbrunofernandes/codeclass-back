@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import BackgroundTasks
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -14,19 +14,32 @@ from app.core.database import async_session_maker
 from app.core.exceptions import (
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     NotFoundException,
 )
 from app.models.assignment import Assignment
+from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
 from app.models.submission import (
     Submission,
     SubmissionAiInsight,
     SubmissionEvaluation,
 )
+from app.models.user import User
+from app.schemas.evaluation import (
+    SubmissionEvaluationRequest,
+    SubmissionEvaluationResponse,
+)
 from app.schemas.submission import (
     CodeSubmissionContent,
     QuestionnaireSubmissionContent,
+    SubmissionAiInsightResponse,
+    SubmissionAssignmentInfo,
     SubmissionCreateRequest,
+    SubmissionDetailStudentResponse,
+    SubmissionDetailTeacherResponse,
+    SubmissionStatsResponse,
+    SubmissionStudentInfo,
 )
 from app.services.ai_service import ai_service
 
@@ -352,9 +365,13 @@ class SubmissionService:
         student_id: uuid.UUID,
         db: AsyncSession,
     ) -> Submission:
-        stmt = select(Submission).where(
-            Submission.assignment_id == assignment.id,
-            Submission.student_id == student_id,
+        stmt = (
+            select(Submission)
+            .options(selectinload(Submission.evaluation))
+            .where(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == student_id,
+            )
         )
         result = await db.execute(stmt)
         sub = result.scalar_one_or_none()
@@ -370,9 +387,9 @@ class SubmissionService:
         if sub.status == SubmissionStatus.DRAFT:
             raise BadRequestException("A entrega já se encontra em rascunho.")
 
-        if sub.status == SubmissionStatus.PUBLISHED:
+        if sub.status == SubmissionStatus.PUBLISHED or sub.evaluation is not None:
             raise BadRequestException(
-                "Não é possível desfazer uma entrega já avaliada/publicada."
+                "Não é possível desfazer uma entrega já avaliada ou que possui correção docente."
             )
 
         sub.status = SubmissionStatus.DRAFT
@@ -380,23 +397,280 @@ class SubmissionService:
         await db.refresh(sub)
         return sub
 
-    async def get_my_submission(
+    async def list_submissions(
+        self,
+        assignment_id: uuid.UUID | None = None,
+        status_filter: SubmissionStatus | None = None,
+        db: AsyncSession | None = None,
+        *,
+        classroom_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID | None = None,
+        student_id: uuid.UUID | None = None,
+        search_query: str | None = None,
+        teacher_id: uuid.UUID | None = None,
+        enrolled_student_id: uuid.UUID | None = None,
+    ) -> list[Submission]:
+        """Lista as submissões com suporte a filtros globais, por sala, atividade, status, aluno e busca textual."""
+        if db is None:
+            raise ValueError("Database session is required")
+
+        stmt = (
+            select(Submission)
+            .join(Submission.assignment)
+            .join(Assignment.classroom)
+            .options(
+                selectinload(Submission.assignment),
+                selectinload(Submission.student),
+                selectinload(Submission.ai_insight),
+                selectinload(Submission.evaluation),
+            )
+        )
+
+        if organization_id:
+            stmt = stmt.where(Classroom.organization_id == organization_id)
+        if classroom_id:
+            stmt = stmt.where(Assignment.classroom_id == classroom_id)
+        if assignment_id:
+            stmt = stmt.where(Submission.assignment_id == assignment_id)
+        if teacher_id:
+            stmt = stmt.where(Classroom.teacher_id == teacher_id)
+        if enrolled_student_id:
+            stmt = stmt.where(
+                Classroom.id.in_(
+                    select(ClassroomStudent.classroom_id).where(
+                        ClassroomStudent.student_id == enrolled_student_id
+                    )
+                )
+            )
+        if student_id:
+            stmt = stmt.where(Submission.student_id == student_id)
+        if status_filter:
+            stmt = stmt.where(Submission.status == status_filter)
+        if search_query and search_query.strip():
+            term = f"%{search_query.strip()}%"
+            stmt = stmt.join(Submission.student).where(
+                or_(User.full_name.ilike(term), User.email.ilike(term))
+            )
+
+        stmt = stmt.order_by(Submission.submitted_at.desc())
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    def get_submission_detail(
+        self,
+        submission: Submission,
+        can_view_ai_insights: bool | None = None,
+        is_student: bool | None = None,
+    ) -> SubmissionDetailTeacherResponse | SubmissionDetailStudentResponse:
+        """Serializa os detalhes da submissão com segregação estrita de IA (omitida para estudantes) e retenção de avaliação."""
+        if can_view_ai_insights is None:
+            can_view_ai_insights = not (is_student if is_student is not None else False)
+
+        assignment_info = SubmissionAssignmentInfo.model_validate(submission.assignment)
+
+        if can_view_ai_insights:
+            ai_insight = None
+            evaluation = None
+            if submission.ai_insight:
+                ai_insight = SubmissionAiInsightResponse.model_validate(
+                    submission.ai_insight
+                )
+            if submission.evaluation:
+                evaluation = SubmissionEvaluationResponse.model_validate(
+                    submission.evaluation
+                )
+
+            return SubmissionDetailTeacherResponse(
+                id=submission.id,
+                assignment=assignment_info,
+                student=SubmissionStudentInfo.model_validate(submission.student),
+                content=submission.content,
+                grade=submission.grade,
+                status=submission.status,
+                submitted_at=submission.submitted_at,
+                ai_insight=ai_insight,
+                evaluation=evaluation,
+            )
+
+        # Estudante: o schema nem sequer possui o campo ai_insight (segregação por design)
+        evaluation_student = None
+        if submission.status == SubmissionStatus.PUBLISHED and submission.evaluation:
+            evaluation_student = SubmissionEvaluationResponse.model_validate(
+                submission.evaluation
+            )
+
+        return SubmissionDetailStudentResponse(
+            id=submission.id,
+            assignment=assignment_info,
+            student=SubmissionStudentInfo.model_validate(submission.student),
+            content=submission.content,
+            grade=submission.grade,
+            status=submission.status,
+            submitted_at=submission.submitted_at,
+            evaluation=evaluation_student,
+        )
+
+    async def evaluate_submission(
+        self,
+        submission: Submission,
+        request: SubmissionEvaluationRequest,
+        db: AsyncSession,
+    ) -> SubmissionEvaluation:
+        """Registra ou atualiza a avaliação docente formal de uma submissão."""
+        if submission.status == SubmissionStatus.DRAFT:
+            raise BadRequestException("Não é possível avaliar uma entrega em rascunho.")
+        if submission.status == SubmissionStatus.PENDING:
+            raise BadRequestException(
+                "A submissão ainda está em processamento inicial. Aguarde a conclusão da análise para avaliá-la."
+            )
+
+        eval_stmt = select(SubmissionEvaluation).where(
+            SubmissionEvaluation.submission_id == submission.id
+        )
+        evaluation = (await db.execute(eval_stmt)).scalar_one_or_none()
+
+        if evaluation:
+            evaluation.grade = request.grade
+            evaluation.general_feedback = request.general_feedback
+            evaluation.detailed_scores = request.detailed_scores
+        else:
+            evaluation = SubmissionEvaluation(
+                submission_id=submission.id,
+                grade=request.grade,
+                general_feedback=request.general_feedback,
+                detailed_scores=request.detailed_scores,
+            )
+            db.add(evaluation)
+
+        if request.publish:
+            submission.status = SubmissionStatus.PUBLISHED
+            submission.grade = request.grade
+        else:
+            submission.status = SubmissionStatus.AWAITING_REVIEW
+            submission.grade = None
+
+        await db.commit()
+        await db.refresh(evaluation)
+        await db.refresh(submission)
+        return evaluation
+
+    async def get_submission_evaluation(
+        self,
+        submission: Submission,
+        is_teacher_or_admin: bool,
+        is_author: bool,
+        db: AsyncSession,
+    ) -> SubmissionEvaluation:
+        """Consulta a avaliação formal docente de uma submissão com controle de retenção."""
+        if (
+            is_author
+            and not is_teacher_or_admin
+            and submission.status != SubmissionStatus.PUBLISHED
+        ):
+            raise ForbiddenException(
+                "Acesso negado: a avaliação desta atividade ainda não foi publicada."
+            )
+
+        eval_stmt = select(SubmissionEvaluation).where(
+            SubmissionEvaluation.submission_id == submission.id
+        )
+        evaluation = (await db.execute(eval_stmt)).scalar_one_or_none()
+
+        if not evaluation:
+            raise NotFoundException("Avaliação não encontrada para esta submissão.")
+
+        return evaluation
+
+    async def publish_assignment_evaluations(
+        self,
+        assignment_id: uuid.UUID,
+        db: AsyncSession,
+        submission_ids: list[uuid.UUID] | None = None,
+    ) -> int:
+        """Publica em lote submissões de uma tarefa que possuem avaliação registrada e estão com status awaiting_review."""
+        stmt = (
+            select(Submission)
+            .options(selectinload(Submission.evaluation))
+            .where(
+                Submission.assignment_id == assignment_id,
+                Submission.status == SubmissionStatus.AWAITING_REVIEW,
+            )
+        )
+        if submission_ids is not None:
+            stmt = stmt.where(Submission.id.in_(submission_ids))
+
+        result = await db.execute(stmt)
+        submissions = result.scalars().all()
+
+        published_count = 0
+        for sub in submissions:
+            if sub.evaluation is not None:
+                sub.status = SubmissionStatus.PUBLISHED
+                sub.grade = sub.evaluation.grade
+                published_count += 1
+
+        if published_count > 0:
+            await db.commit()
+
+        return published_count
+
+    async def get_assignment_submission_stats(
         self,
         assignment: Assignment,
-        student_id: uuid.UUID,
         db: AsyncSession,
-    ) -> Submission:
-        stmt = select(Submission).where(
-            Submission.assignment_id == assignment.id,
-            Submission.student_id == student_id,
+    ) -> SubmissionStatsResponse:
+        """Calcula métricas executivas de correção e engajamento da tarefa."""
+        # 1. Total de alunos matriculados na turma
+        enrolled_stmt = select(func.count(ClassroomStudent.student_id)).where(
+            ClassroomStudent.classroom_id == assignment.classroom_id
         )
-        result = await db.execute(stmt)
-        sub = result.scalar_one_or_none()
+        total_enrolled = (await db.execute(enrolled_stmt)).scalar() or 0
 
-        if not sub:
-            raise NotFoundException("Nenhuma entrega encontrada para esta atividade.")
+        # 2. Submissões da atividade
+        subs_stmt = (
+            select(Submission)
+            .options(selectinload(Submission.evaluation))
+            .where(Submission.assignment_id == assignment.id)
+        )
+        subs_result = await db.execute(subs_stmt)
+        submissions = subs_result.scalars().all()
 
-        return sub
+        total_submissions = len(submissions)
+        pending = 0
+        awaiting_review = 0
+        ready_to_publish = 0
+        published = 0
+        published_grades: list[Decimal] = []
+
+        for sub in submissions:
+            if sub.status == SubmissionStatus.PENDING:
+                pending += 1
+            elif sub.status == SubmissionStatus.AWAITING_REVIEW:
+                if sub.evaluation is not None:
+                    ready_to_publish += 1
+                else:
+                    awaiting_review += 1
+            elif sub.status == SubmissionStatus.PUBLISHED:
+                published += 1
+                if sub.grade is not None:
+                    published_grades.append(sub.grade)
+
+        average_grade = None
+        if published_grades:
+            average_grade = round(
+                Decimal(sum(published_grades)) / Decimal(len(published_grades)), 2
+            )
+
+        return SubmissionStatsResponse(
+            assignment_id=assignment.id,
+            total_enrolled=total_enrolled,
+            total_submissions=total_submissions,
+            pending=pending,
+            awaiting_review=awaiting_review,
+            ready_to_publish=ready_to_publish,
+            published=published,
+            average_grade=average_grade,
+        )
 
 
 submission_service = SubmissionService()

@@ -19,6 +19,7 @@ from app.models.assignment import Assignment
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
+from app.models.submission import Submission
 from app.models.user import User
 from app.services.auth_service import auth_service
 
@@ -244,16 +245,102 @@ async def get_assignment_context(
     )
 
 
+@dataclass
+class SubmissionContext:
+    submission: Submission
+    assignment: Assignment
+    classroom: Classroom
+    current_member: OrganizationMember
+    is_owner: bool
+    is_admin: bool
+    is_teacher_of_class: bool
+    is_submission_author: bool
+    is_enrolled_student: bool
+
+    @property
+    def can_view(self) -> bool:
+        return (
+            self.is_owner
+            or self.is_admin
+            or self.is_teacher_of_class
+            or self.is_submission_author
+        )
+
+    @property
+    def can_evaluate(self) -> bool:
+        return self.is_teacher_of_class
+
+    @property
+    def can_view_ai_insights(self) -> bool:
+        return self.is_owner or self.is_admin or self.is_teacher_of_class
+
+
+async def get_submission_context(
+    submission_id: UUID,
+    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SubmissionContext:
+    """Carrega a submissão e valida isolamento de tenant e privilégios contextuais."""
+    stmt = (
+        select(Submission)
+        .options(
+            selectinload(Submission.assignment).selectinload(Assignment.classroom),
+            selectinload(Submission.student),
+            selectinload(Submission.ai_insight),
+            selectinload(Submission.evaluation),
+        )
+        .where(Submission.id == submission_id)
+    )
+    result = await db.execute(stmt)
+    submission = result.scalar_one_or_none()
+
+    if submission is None:
+        raise NotFoundException("Submissão não encontrada.")
+
+    assignment = submission.assignment
+    classroom = assignment.classroom
+
+    if classroom.organization_id != current_member.organization_id:
+        raise ForbiddenException("Acesso negado a recursos de outra organização.")
+
+    is_owner = current_member.role == OrgRole.OWNER
+    is_admin = current_member.role == OrgRole.ADMIN
+    is_teacher_of_class = classroom.teacher_id == current_member.user_id
+    is_submission_author = submission.student_id == current_member.user_id
+
+    # Checa se o usuário é aluno matriculado na turma
+    enrolled_stmt = select(ClassroomStudent).where(
+        ClassroomStudent.classroom_id == classroom.id,
+        ClassroomStudent.student_id == current_member.user_id,
+    )
+    enrolled_res = await db.execute(enrolled_stmt)
+    is_enrolled_student = enrolled_res.scalar_one_or_none() is not None
+
+    return SubmissionContext(
+        submission=submission,
+        assignment=assignment,
+        classroom=classroom,
+        current_member=current_member,
+        is_owner=is_owner,
+        is_admin=is_admin,
+        is_teacher_of_class=is_teacher_of_class,
+        is_submission_author=is_submission_author,
+        is_enrolled_student=is_enrolled_student,
+    )
+
+
 __all__ = [
     "AssignmentContext",
     "AsyncGenerator",
     "AsyncSession",
     "ClassroomContext",
+    "SubmissionContext",
     "get_assignment_context",
     "get_classroom_context",
     "get_current_active_member",
     "get_current_user",
     "get_db",
+    "get_submission_context",
     "require_admin_or_owner",
     "require_owner",
     "require_roles",

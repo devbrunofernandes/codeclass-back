@@ -76,14 +76,22 @@ async def test_full_submission_lifecycle_code_and_unsubmit_e2e(
     assert "ai_insights" not in submission_data
     assert "ai_insight" not in submission_data
 
-    # 4. Aluno consulta a própria entrega via GET /submissions/me (processada pelo worker de IA em background)
-    me_res = await async_client.get(
-        f"/api/v1/assignments/{assignment_id}/submissions/me",
+    # 4. Aluno lista suas submissões e consulta os detalhes da entrega
+    list_res = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions",
         headers=tenant.student.auth_headers,
     )
-    assert me_res.status_code == 200
-    assert me_res.json()["id"] == submission_data["id"]
-    assert me_res.json()["status"] == "awaiting_review"
+    assert list_res.status_code == 200
+    assert len(list_res.json()) == 1
+    assert list_res.json()[0]["id"] == submission_data["id"]
+
+    detail_res = await async_client.get(
+        f"/api/v1/submissions/{submission_data['id']}",
+        headers=tenant.student.auth_headers,
+    )
+    assert detail_res.status_code == 200
+    assert detail_res.json()["id"] == submission_data["id"]
+    assert detail_res.json()["status"] == "awaiting_review"
 
     # 5. Tentativa de segunda submissão ativa deve falhar com 409 Conflict (RF21)
     conflict_res = await async_client.post(
@@ -396,3 +404,412 @@ async def test_draft_resubmission_idempotency_e2e(
     assert res3.status_code == 201
     assert res3.json()["status"] == "pending"
     assert mock_ai_service.call_count == 2  # Disparou nova inferência!
+
+
+@pytest.mark.asyncio
+async def test_full_teacher_evaluation_and_student_feedback_lifecycle_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    db_session: AsyncSession,
+):
+    """Jornada E2E completa de avaliação docente e liberação de notas:
+
+    Aluno submete -> IA analisa em background -> Professor lista pendentes e consulta insights ->
+    Professor salva rascunho de nota retida (publish=False) -> Aluno tem nota bloqueada ->
+    Professor publica nota formal (publish=True) -> Aluno consulta avaliação com nota oficial ->
+    Aluno é impedido de desfazer entrega já avaliada.
+    """
+    # 1. Turma e matrícula
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma de Avaliação Formal E2E"},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert class_res.status_code == 201
+    classroom_id = class_res.json()["id"]
+
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    # 2. Professor cria atividade de código
+    assign_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Merge Sort Formal",
+            "description": "Implemente merge sort com recursão",
+            "type": "code",
+            "release_policy": "on_review",
+            "config": {
+                "languages": [{"name": "python3"}],
+                "max_grade": 10.0,
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert assign_res.status_code == 201
+    assignment_id = assign_res.json()["id"]
+
+    # 3. Aluno envia a submissão formal de código
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={
+            "content": {
+                "language": "python3",
+                "code": "def mergesort(arr): return sorted(arr)",
+            }
+        },
+        headers=tenant.student.auth_headers,
+    )
+    assert submit_res.status_code == 201
+    sub_id = submit_res.json()["id"]
+
+    # 4. Professor lista submissões filtradas por status awaiting_review
+    list_res = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions?status=awaiting_review",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert list_res.status_code == 200
+    submissions_list = list_res.json()
+    assert len(submissions_list) == 1
+    assert submissions_list[0]["id"] == sub_id
+    assert submissions_list[0]["ai_insight_status"] == "completed"
+
+    # 5. Professor abre a submissão detalhada com parecer confidencial da IA
+    detail_res = await async_client.get(
+        f"/api/v1/submissions/{sub_id}",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert detail_res.status_code == 200
+    detail_data = detail_res.json()
+    assert detail_data["ai_insight"] is not None
+    assert detail_data["ai_insight"]["status"] == "completed"
+    assert detail_data["ai_insight"]["suggested_grade"] is not None
+
+    # 6. Professor registra avaliação em rascunho com retenção (publish=False)
+    draft_eval_res = await async_client.put(
+        f"/api/v1/submissions/{sub_id}/evaluation",
+        json={
+            "grade": 9.5,
+            "general_feedback": "Excelente lógica. Falta apenas documentar.",
+            "detailed_scores": {"code_quality": 4.5, "correctness": 5.0},
+            "publish": False,
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert draft_eval_res.status_code == 200
+
+    # 7. Aluno consulta GET /submissions/{id} -> nota continua retida (None), status awaiting_review e evaluation oculta
+    detail_res = await async_client.get(
+        f"/api/v1/submissions/{sub_id}",
+        headers=tenant.student.auth_headers,
+    )
+    assert detail_res.status_code == 200
+    assert detail_res.json()["grade"] is None
+    assert detail_res.json()["status"] == "awaiting_review"
+    assert detail_res.json()["evaluation"] is None
+
+    # 8. Aluno tenta consultar GET /submissions/{id}/evaluation antes da publicação -> 403 Forbidden
+    student_eval_res = await async_client.get(
+        f"/api/v1/submissions/{sub_id}/evaluation",
+        headers=tenant.student.auth_headers,
+    )
+    assert student_eval_res.status_code == 403
+
+    # 9. Professor finaliza e publica a avaliação (publish=True)
+    publish_eval_res = await async_client.put(
+        f"/api/v1/submissions/{sub_id}/evaluation",
+        json={
+            "grade": 9.5,
+            "general_feedback": "Excelente lógica. Parabéns!",
+            "detailed_scores": {"code_quality": 4.5, "correctness": 5.0},
+            "publish": True,
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert publish_eval_res.status_code == 200
+
+    # 10. Aluno consulta novamente /submissions/{id} -> nota oficial publicada, status published e avaliação liberada
+    detail_res_after = await async_client.get(
+        f"/api/v1/submissions/{sub_id}",
+        headers=tenant.student.auth_headers,
+    )
+    assert detail_res_after.status_code == 200
+    assert float(detail_res_after.json()["grade"]) == 9.5
+    assert detail_res_after.json()["status"] == "published"
+    assert detail_res_after.json()["evaluation"] is not None
+    assert float(detail_res_after.json()["evaluation"]["grade"]) == 9.5
+
+    # 11. Aluno consulta formalmente a avaliação -> 200 OK com parecer do professor
+    eval_released_res = await async_client.get(
+        f"/api/v1/submissions/{sub_id}/evaluation",
+        headers=tenant.student.auth_headers,
+    )
+    assert eval_released_res.status_code == 200
+    assert float(eval_released_res.json()["grade"]) == 9.5
+    assert eval_released_res.json()["general_feedback"] == "Excelente lógica. Parabéns!"
+
+    # 12. Aluno tenta desfazer a entrega (Unsubmit) após publicação -> deve ser bloqueado com 400 Bad Request
+    unsubmit_blocked = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+    assert unsubmit_blocked.status_code == 400
+    assert "já avaliada" in unsubmit_blocked.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_batch_evaluation_release_lifecycle_integration_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    """Jornada completa E2E: dois alunos entregam, professor avalia em rascunho e publica em lote."""
+    # 1. Configuração da sala e atividade dissertativa/código
+    classroom_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={
+            "name": "Turma de Estruturas de Dados Batch",
+            "description": "Teste Batch",
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert classroom_res.status_code == 201
+    class_id = classroom_res.json()["id"]
+
+    # Matricula o aluno 1 e aluno 2
+    r_enroll1 = await async_client.post(
+        f"/api/v1/classrooms/{class_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert r_enroll1.status_code == 201
+
+    r_enroll2 = await async_client.post(
+        f"/api/v1/classrooms/{class_id}/students",
+        json={"student_id": str(tenant.other_student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert r_enroll2.status_code == 201
+
+    assign_res = await async_client.post(
+        f"/api/v1/classrooms/{class_id}/assignments",
+        json={
+            "title": "Árvores Binárias de Busca",
+            "description": "Implemente a inserção balanceada",
+            "type": "code",
+            "release_policy": "on_review",
+            "deadline": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "config": {
+                "languages": [{"name": "python3"}],
+                "rubric": "Corretude do algoritmo",
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert assign_res.status_code == 201
+    assignment_id = assign_res.json()["id"]
+
+    # 2. Aluno 1 submete
+    sub1_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": "# Aluno 1 code"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert sub1_res.status_code == 201
+    sub1_id = sub1_res.json()["id"]
+
+    # 3. Aluno 2 submete
+    sub2_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": "# Aluno 2 code"}},
+        headers=tenant.other_student.auth_headers,
+    )
+    assert sub2_res.status_code == 201
+    sub2_id = sub2_res.json()["id"]
+
+    # 4. Professor avalia ambos mantendo em rascunho (publish=False)
+    eval1 = await async_client.put(
+        f"/api/v1/submissions/{sub1_id}/evaluation",
+        json={"grade": 8.0, "general_feedback": "Bom trabalho", "publish": False},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert eval1.status_code == 200
+
+    eval2 = await async_client.put(
+        f"/api/v1/submissions/{sub2_id}/evaluation",
+        json={"grade": 9.5, "general_feedback": "Excelente solução", "publish": False},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert eval2.status_code == 200
+
+    # 5. Ambos alunos verificam que nota e avaliação estão retidas
+    check1 = await async_client.get(
+        f"/api/v1/submissions/{sub1_id}",
+        headers=tenant.student.auth_headers,
+    )
+    assert check1.json()["status"] == "awaiting_review"
+    assert check1.json()["grade"] is None
+    assert check1.json()["evaluation"] is None
+
+    check2 = await async_client.get(
+        f"/api/v1/submissions/{sub2_id}",
+        headers=tenant.other_student.auth_headers,
+    )
+    assert check2.json()["status"] == "awaiting_review"
+    assert check2.json()["grade"] is None
+    assert check2.json()["evaluation"] is None
+
+    # 6. Professor dispara liberação em lote das correções
+    batch_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/publish-evaluations",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert batch_res.status_code == 200
+    assert batch_res.json()["published_count"] == 2
+
+    # 7. Ambos alunos agora verificam que as notas e pareceres foram liberados
+    final1 = await async_client.get(
+        f"/api/v1/submissions/{sub1_id}",
+        headers=tenant.student.auth_headers,
+    )
+    assert final1.json()["status"] == "published"
+    assert float(final1.json()["grade"]) == 8.0
+    assert final1.json()["evaluation"] is not None
+
+    final2 = await async_client.get(
+        f"/api/v1/submissions/{sub2_id}",
+        headers=tenant.other_student.auth_headers,
+    )
+    assert final2.json()["status"] == "published"
+    assert float(final2.json()["grade"]) == 9.5
+    assert final2.json()["evaluation"] is not None
+
+
+@pytest.mark.asyncio
+async def test_selective_batch_evaluation_release_and_stats_lifecycle_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    """Jornada E2E completa: métricas executivas da tarefa, busca/filtro e liberação seletiva em lote."""
+    # 1. Cria turma e matricula 2 alunos
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma com Métricas e Lote Seletivo"},
+        headers=tenant.teacher.auth_headers,
+    )
+    classroom_id = class_res.json()["id"]
+
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.other_student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    # 2. Cria atividade
+    assign_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Árvores AVL e Balanceamento",
+            "description": "Implemente a rotação dupla",
+            "type": "code",
+            "release_policy": "on_review",
+            "deadline": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "config": {
+                "languages": [{"name": "python3"}],
+                "rubric": "Corretude do algoritmo",
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assignment_id = assign_res.json()["id"]
+
+    # 3. Estatísticas iniciais: 2 matriculados, 0 submissões
+    stats_res0 = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions/stats",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert stats_res0.status_code == 200
+    s0 = stats_res0.json()
+    assert s0["total_enrolled"] == 2
+    assert s0["total_submissions"] == 0
+
+    # 4. Ambos alunos submetem
+    sub1_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": "# AVL Aluno 1"}},
+        headers=tenant.student.auth_headers,
+    )
+    sub1_id = sub1_res.json()["id"]
+
+    sub2_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": "# AVL Aluno 2"}},
+        headers=tenant.other_student.auth_headers,
+    )
+    sub2_id = sub2_res.json()["id"]
+
+    # 5. Estatísticas pós-submissões: 2 awaiting_review (ainda sem avaliação docente)
+    stats_res1 = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions/stats",
+        headers=tenant.teacher.auth_headers,
+    )
+    s1 = stats_res1.json()
+    assert s1["total_submissions"] == 2
+    assert s1["awaiting_review"] == 2
+    assert s1["ready_to_publish"] == 0
+
+    # 6. Filtro por busca de texto (termo único 'Other' do second student)
+    list_q = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions?q=Other",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert len(list_q.json()) == 1
+    assert list_q.json()[0]["id"] == sub2_id
+
+    # 7. Professor avalia apenas Aluno 1 em rascunho
+    await async_client.put(
+        f"/api/v1/submissions/{sub1_id}/evaluation",
+        json={
+            "grade": 8.0,
+            "general_feedback": "Ótimo balanceamento",
+            "publish": False,
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+
+    # 8. Estatísticas: 1 awaiting_review, 1 ready_to_publish
+    stats_res2 = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions/stats",
+        headers=tenant.teacher.auth_headers,
+    )
+    s2 = stats_res2.json()
+    assert s2["awaiting_review"] == 1
+    assert s2["ready_to_publish"] == 1
+    assert s2["published"] == 0
+
+    # 9. Professor libera seletivamente APENAS a avaliação de sub1
+    batch_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/publish-evaluations",
+        json={"submission_ids": [sub1_id]},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert batch_res.status_code == 200
+    assert batch_res.json()["published_count"] == 1
+
+    # 10. Estatísticas finais: 1 publicado, 1 aguardando revisão, nota média 8.0
+    stats_res3 = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}/submissions/stats",
+        headers=tenant.teacher.auth_headers,
+    )
+    s3 = stats_res3.json()
+    assert s3["published"] == 1
+    assert s3["ready_to_publish"] == 0
+    assert s3["awaiting_review"] == 1
+    assert float(s3["average_grade"]) == 8.0

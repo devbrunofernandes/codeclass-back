@@ -166,8 +166,9 @@ def test_indexes():
     assert "idx_classrooms_org" in get_index_names("classrooms")
     assert "idx_classrooms_teacher" in get_index_names("classrooms")
     assert "idx_classroom_students_student" in get_index_names("classroom_students")
-    assert "idx_assignments_class" in get_index_names("assignments")
+    assert "idx_assignments_classroom_created" in get_index_names("assignments")
     assert "idx_submissions_assignment_status" in get_index_names("submissions")
+    assert "idx_submissions_student_status" in get_index_names("submissions")
     assert "idx_classroom_messages_room_created" in get_index_names(
         "classroom_messages"
     )

@@ -78,6 +78,12 @@ class Submission(Base):
             status,
             submitted_at.desc(),
         ),
+        Index(
+            "idx_submissions_student_status",
+            student_id,
+            status,
+            submitted_at.desc(),
+        ),
     )
 
     # Relationships
@@ -103,6 +109,10 @@ class Submission(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+    @property
+    def ai_insight_status(self) -> str | None:
+        return self.ai_insight.status if self.ai_insight else None
 
     def __repr__(self) -> str:
         return f"<Submission id={self.id} assignment_id={self.assignment_id} student_id={self.student_id} status={self.status.value}>"

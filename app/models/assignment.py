@@ -72,7 +72,9 @@ class Assignment(Base):
         nullable=False,
     )
 
-    __table_args__ = (Index("idx_assignments_class", "classroom_id"),)
+    __table_args__ = (
+        Index("idx_assignments_classroom_created", classroom_id, created_at.desc()),
+    )
 
     # Relationships
     classroom: Mapped[Classroom] = relationship(

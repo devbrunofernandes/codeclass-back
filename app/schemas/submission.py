@@ -3,9 +3,10 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.enums import SubmissionStatus
+from app.models.enums import AssignmentType, SubmissionStatus
+from app.schemas.evaluation import SubmissionEvaluationResponse
 
 
 class CodeSubmissionContent(BaseModel):
@@ -94,5 +95,93 @@ class SubmissionAiInsightResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionAssignmentInfo(BaseModel):
+    id: UUID
+    title: str
+    type: AssignmentType
+    classroom_id: UUID
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionStudentInfo(BaseModel):
+    id: UUID
+    full_name: str
+    email: EmailStr
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionSummaryStudentResponse(BaseModel):
+    id: UUID
+    assignment: SubmissionAssignmentInfo
+    student: SubmissionStudentInfo
+    grade: Decimal | None = None
+    status: SubmissionStatus
+    submitted_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionSummaryTeacherResponse(BaseModel):
+    id: UUID
+    assignment: SubmissionAssignmentInfo
+    student: SubmissionStudentInfo
+    grade: Decimal | None = None
+    status: SubmissionStatus
+    submitted_at: datetime
+    ai_insight_status: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Alias para retrocompatibilidade
+SubmissionSummaryResponse = SubmissionSummaryTeacherResponse
+
+
+class SubmissionDetailStudentResponse(BaseModel):
+    id: UUID
+    assignment: SubmissionAssignmentInfo
+    student: SubmissionStudentInfo
+    content: dict[str, Any]
+    grade: Decimal | None = None
+    status: SubmissionStatus
+    submitted_at: datetime
+    evaluation: SubmissionEvaluationResponse | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionDetailTeacherResponse(BaseModel):
+    id: UUID
+    assignment: SubmissionAssignmentInfo
+    student: SubmissionStudentInfo
+    content: dict[str, Any]
+    grade: Decimal | None = None
+    status: SubmissionStatus
+    submitted_at: datetime
+    ai_insight: SubmissionAiInsightResponse | None = None
+    evaluation: SubmissionEvaluationResponse | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Alias para retrocompatibilidade semântica
+SubmissionDetailResponse = SubmissionDetailTeacherResponse
+
+
+class SubmissionStatsResponse(BaseModel):
+    assignment_id: UUID
+    total_enrolled: int = Field(ge=0)
+    total_submissions: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    awaiting_review: int = Field(ge=0)
+    ready_to_publish: int = Field(ge=0)
+    published: int = Field(ge=0)
+    average_grade: Decimal | None = None
 
     model_config = ConfigDict(from_attributes=True)
