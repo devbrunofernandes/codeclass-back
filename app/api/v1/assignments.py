@@ -17,7 +17,9 @@ from app.schemas.assignment import (
     AssignmentTeacherResponse,
     AssignmentUpdateRequest,
 )
+from app.schemas.runner import TestRunRequest, TestRunResponse
 from app.services.assignment_service import assignment_service
+from app.services.runner_service import runner_service
 
 router = APIRouter()
 
@@ -121,3 +123,24 @@ async def delete_assignment(
 
     await assignment_service.delete_assignment(context.assignment, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/assignments/{assignment_id}/test-run",
+    response_model=TestRunResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Executa código experimental via Code Runner contra casos de teste (efêmero)",
+)
+async def test_run_assignment(
+    request: TestRunRequest,
+    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+) -> TestRunResponse:
+    if not context.can_view:
+        raise ForbiddenException(
+            "Acesso negado: você não possui permissão para executar código nesta atividade."
+        )
+
+    return await runner_service.execute_test_run(
+        assignment=context.assignment,
+        request=request,
+    )

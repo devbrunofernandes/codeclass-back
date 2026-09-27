@@ -23,3 +23,13 @@ class SubmissionStatus(str, enum.Enum):
     PENDING = "pending"
     AWAITING_REVIEW = "awaiting_review"
     PUBLISHED = "published"
+
+
+class TestRunVerdict(str, enum.Enum):
+    __test__ = False
+    ACCEPTED = "ACCEPTED"
+    WRONG_ANSWER = "WRONG_ANSWER"
+    TIME_LIMIT_EXCEEDED = "TIME_LIMIT_EXCEEDED"
+    COMPILATION_ERROR = "COMPILATION_ERROR"
+    RUNTIME_ERROR = "RUNTIME_ERROR"
+    INTERNAL_ERROR = "INTERNAL_ERROR"

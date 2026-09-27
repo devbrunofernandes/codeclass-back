@@ -3,6 +3,8 @@
 start:
 	@echo "--> Iniciando infraestrutura do Supabase..."
 	@npx supabase start
+	@echo "--> Iniciando executor de código local (Piston)..."
+	@docker start codeclass-runner 2>/dev/null || (docker run -d --privileged -v codeclass_piston:/piston --name codeclass-runner -p 2000:2000 ghcr.io/engineer-man/piston && sleep 2 && curl -s -X POST http://localhost:2000/api/v2/packages -H "Content-Type: application/json" -d '{"language": "python", "version": "3.12.0"}' >/dev/null 2>&1)
 	@echo "--> Aplicando migrações do Alembic..."
 	@uv run alembic upgrade head
 	@echo "--> Aplicando seed do Supabase..."
@@ -16,6 +18,8 @@ start:
 stop:
 	@echo "--> Encerrando FastAPI..."
 	@fuser -k 8000/tcp 2>/dev/null || true
+	@echo "--> Encerrando executor de código local (Piston)..."
+	@docker stop codeclass-runner 2>/dev/null || true
 	@echo "--> Encerrando containers do Supabase..."
 	@npx supabase stop
 	@echo "Ambiente encerrado."

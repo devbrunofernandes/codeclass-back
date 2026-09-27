@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = ""
     SUPABASE_JWT_SECRET: str = ""
 
-    # External Integrations
-    JUDGE0_API_URL: str = "https://judge0-ce.p.rapidapi.com"
-    JUDGE0_API_KEY: str = ""
+    # External Integrations - Code Runner Engine (Agnóstico)
+    RUNNER_PROVIDER: str = "judge0"
+    RUNNER_API_URL: str = "https://judge0-ce.p.rapidapi.com"
+    RUNNER_API_KEY: str = ""
+    RUNNER_TIMEOUT_SEC: float = 15.0
 
     # External Integrations - AI Engine
     AI_PROVIDER: str = "gemini"

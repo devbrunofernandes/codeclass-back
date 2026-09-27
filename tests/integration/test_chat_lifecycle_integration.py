@@ -125,8 +125,7 @@ async def test_chat_lifecycle_integration(
     assert msg1_audit is not None
     assert msg1_audit.is_deleted is True
     assert (
-        msg1_audit.content
-        == "Professor, teremos revisão para a prova de sexta-feira?"
+        msg1_audit.content == "Professor, teremos revisão para a prova de sexta-feira?"
     )
 
     # 9. Cascata relacional: exclusão da sala de aula remove todas as mensagens associadas

@@ -68,3 +68,25 @@ class AuthError(AppException):
 
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message=message, status_code=status_code)
+
+
+class RunnerError(AppException):
+    """Falha de comunicação ou indisponibilidade do executor remoto de código."""
+
+    def __init__(
+        self,
+        message: str = "Falha na comunicação com o executor de código.",
+        status_code: int = 502,
+    ) -> None:
+        super().__init__(message=message, status_code=status_code)
+
+
+class RunnerTimeoutError(AppException):
+    """Timeout de infraestrutura na comunicação com o executor remoto de código."""
+
+    def __init__(
+        self,
+        message: str = "O executor de código externo demorou muito para responder.",
+        status_code: int = 504,
+    ) -> None:
+        super().__init__(message=message, status_code=status_code)
