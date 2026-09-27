@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     SUPABASE_JWT_SECRET: str = ""
+    STORAGE_PROVIDER: str = "supabase"
 
     # External Integrations - Code Runner Engine (Agnóstico)
     RUNNER_PROVIDER: str = "judge0"
