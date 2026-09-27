@@ -71,7 +71,7 @@ async def update_my_password(
     summary="Consulta dados de um usuário da mesma organização",
     description=(
         "Retorna os dados cadastrais e papel do usuário especificado, restrito aos membros "
-        "da mesma organização do solicitante (RNF01). Membros desativados permanecem consultáveis "
+        "da mesma organização do solicitante. Membros desativados permanecem consultáveis "
         "para fins de histórico e auditoria da instituição."
     ),
 )

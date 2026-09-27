@@ -149,7 +149,7 @@ class AssignmentCreateRequest(BaseModel):
         ):
             raise ValueError("O campo 'config' deve seguir o formato de questionário.")
 
-        # Validação semântica de Release Policy (RF15 e HLD Seção 3.2)
+        # Validação semântica de Release Policy conforme diretrizes pedagógicas
         if self.release_policy == ReleasePolicyType.IMMEDIATE:
             if self.type == AssignmentType.CODE:
                 raise ValueError(

@@ -5,12 +5,11 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    get_current_active_member,
     get_db,
     require_admin_or_owner,
+    require_org_member,
     require_owner,
     require_teacher_admin_or_owner,
-    verify_org_access,
 )
 from app.api.v1 import members
 from app.models.organization import OrganizationMember
@@ -51,16 +50,16 @@ async def register_organization(
 )
 async def get_organization(
     org_id: UUID,
-    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+    current_member: Annotated[OrganizationMember, Depends(require_org_member)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
-    await verify_org_access(org_id, current_member)
     return await organization_service.get_organization(org_id=org_id, db=db)
 
 
 @router.patch(
     "/{org_id}",
     response_model=OrganizationResponse,
+    dependencies=[Depends(require_org_member)],
     summary="Atualiza dados cadastrais da organização (Apenas Owner)",
 )
 async def update_organization(
@@ -69,7 +68,6 @@ async def update_organization(
     current_member: Annotated[OrganizationMember, Depends(require_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
-    await verify_org_access(org_id, current_member)
     return await organization_service.update_organization(
         org_id=org_id, request=request, db=db
     )
@@ -78,6 +76,7 @@ async def update_organization(
 @router.delete(
     "/{org_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_org_member)],
     summary="Exclui definitivamente a organização (Apenas Owner)",
 )
 async def delete_organization(
@@ -85,7 +84,6 @@ async def delete_organization(
     current_member: Annotated[OrganizationMember, Depends(require_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    await verify_org_access(org_id, current_member)
     await organization_service.delete_organization(org_id=org_id, db=db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -93,6 +91,7 @@ async def delete_organization(
 @router.put(
     "/{org_id}/owner",
     response_model=OrganizationResponse,
+    dependencies=[Depends(require_org_member)],
     summary="Transfere a titularidade da instituição para outro membro (Apenas Owner)",
 )
 async def transfer_ownership(
@@ -101,7 +100,6 @@ async def transfer_ownership(
     current_member: Annotated[OrganizationMember, Depends(require_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
-    await verify_org_access(org_id, current_member)
     return await organization_service.transfer_ownership(
         org_id=org_id,
         request=request,
@@ -113,6 +111,7 @@ async def transfer_ownership(
 @router.get(
     "/{org_id}/classrooms",
     response_model=list[ClassroomSummaryResponse],
+    dependencies=[Depends(require_org_member)],
     summary="Lista todas as turmas da instituição para auditoria e supervisão (Admin, Owner)",
 )
 async def list_organization_classrooms(
@@ -120,7 +119,6 @@ async def list_organization_classrooms(
     current_member: Annotated[OrganizationMember, Depends(require_admin_or_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[ClassroomSummaryResponse]:
-    await verify_org_access(org_id, current_member)
     classrooms = await classroom_service.list_organization_classrooms(
         organization_id=org_id, db=db
     )
@@ -131,6 +129,7 @@ async def list_organization_classrooms(
     "/{org_id}/classrooms",
     response_model=ClassroomResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_org_member)],
     summary="Cria sala de aula (Teacher assume docência; Admin/Owner indicam docente)",
 )
 async def create_organization_classroom(
@@ -141,7 +140,6 @@ async def create_organization_classroom(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomResponse:
-    await verify_org_access(org_id, current_member)
     classroom = await classroom_service.create_classroom(
         organization_id=org_id,
         name=request.name,

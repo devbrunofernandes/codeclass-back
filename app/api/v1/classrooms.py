@@ -6,12 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     ClassroomContext,
-    get_classroom_context,
     get_current_active_member,
     get_db,
+    require_classroom_permission,
 )
 from app.api.v1 import classroom_attachments
-from app.core.exceptions import ForbiddenException
 from app.models.organization import OrganizationMember
 from app.schemas.classroom import (
     ClassroomDetailResponse,
@@ -49,14 +48,11 @@ async def list_my_classrooms(
     summary="Consulta detalhes completos da sala de aula",
 )
 async def get_classroom_details(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomDetailResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não é membro nem responsável por esta sala de aula."
-        )
-
     return await classroom_service.get_classroom_details(context.classroom, db)
 
 
@@ -67,14 +63,11 @@ async def get_classroom_details(
 )
 async def update_classroom(
     request: ClassroomUpdateRequest,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomResponse:
-    if not context.can_manage_classroom:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável, administradores ou owner podem alterar esta sala."
-        )
-
     updated = await classroom_service.update_classroom(
         context.classroom, request.name, request.description, db
     )
@@ -87,14 +80,11 @@ async def update_classroom(
     summary="Encerra ou remove a sala de aula",
 )
 async def delete_classroom(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    if not context.can_manage_classroom:
-        raise ForbiddenException(
-            "Acesso negado: permissão insuficiente para excluir esta sala de aula."
-        )
-
     await classroom_service.delete_classroom(context.classroom, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -110,14 +100,11 @@ async def delete_classroom(
 )
 async def enroll_student(
     request: EnrollStudentRequest,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomStudentMemberResponse:
-    if not context.can_manage_classroom:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável ou coordenação podem matricular alunos."
-        )
-
     return await classroom_service.enroll_student(
         context.classroom, request.student_id, db
     )
@@ -130,14 +117,11 @@ async def enroll_student(
 )
 async def unenroll_student(
     student_id: UUID,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    if not context.can_manage_classroom:
-        raise ForbiddenException(
-            "Acesso negado: permissão insuficiente para desmatricular alunos desta sala."
-        )
-
     await classroom_service.unenroll_student(context.classroom.id, student_id, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -154,12 +138,9 @@ async def unenroll_student(
     summary="Alias de compatibilidade retroativa para consulta de membros da turma",
 )
 async def list_classroom_members(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomMembersResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não possui permissão para visualizar os membros desta sala."
-        )
-
     return await classroom_service.list_classroom_members(context.classroom, db)

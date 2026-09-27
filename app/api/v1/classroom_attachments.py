@@ -2,8 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, UploadFile, status
 
-from app.api.deps import ClassroomContext, get_classroom_context
-from app.core.exceptions import ForbiddenException
+from app.api.deps import ClassroomContext, require_classroom_permission
 from app.schemas.classroom import (
     ClassroomAttachmentDownloadResponse,
     ClassroomAttachmentResponse,
@@ -21,13 +20,11 @@ router = APIRouter()
 )
 async def upload_attachment(
     file: UploadFile,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext,
+        Depends(require_classroom_permission(can_manage_attachments=True)),
+    ],
 ) -> ClassroomAttachmentResponse:
-    if not context.can_manage_attachments:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala ou owner podem anexar materiais didáticos."
-        )
-
     data = await storage_service.upload_classroom_material(
         organization_id=context.classroom.organization_id,
         classroom_id=context.classroom.id,
@@ -48,11 +45,10 @@ async def upload_attachment(
     summary="Lista metadados dos materiais anexados no Supabase Storage",
 )
 async def list_attachments(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
 ) -> list[ClassroomAttachmentResponse]:
-    if not context.can_view:
-        raise ForbiddenException("Acesso negado: você não é membro desta sala.")
-
     files = await storage_service.list_classroom_materials(
         organization_id=context.classroom.organization_id,
         classroom_id=context.classroom.id,
@@ -77,11 +73,10 @@ async def list_attachments(
 )
 async def get_attachment_download_url(
     file_name: str,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
 ) -> ClassroomAttachmentDownloadResponse:
-    if not context.can_view:
-        raise ForbiddenException("Acesso negado: você não é membro desta sala.")
-
     download_url = await storage_service.create_signed_download_url(
         organization_id=context.classroom.organization_id,
         classroom_id=context.classroom.id,
@@ -103,13 +98,11 @@ async def get_attachment_download_url(
 )
 async def delete_attachment(
     file_name: str,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext,
+        Depends(require_classroom_permission(can_manage_attachments=True)),
+    ],
 ) -> Response:
-    if not context.can_manage_attachments:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala ou owner podem remover materiais didáticos."
-        )
-
     await storage_service.delete_classroom_material(
         organization_id=context.classroom.organization_id,
         classroom_id=context.classroom.id,

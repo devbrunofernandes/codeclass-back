@@ -6,11 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import (
     AssignmentContext,
     ClassroomContext,
-    get_assignment_context,
-    get_classroom_context,
     get_db,
+    require_assignment_permission,
+    require_classroom_permission,
 )
-from app.core.exceptions import ForbiddenException
 from app.schemas.assignment import (
     AssignmentCreateRequest,
     AssignmentStudentResponse,
@@ -32,14 +31,11 @@ router = APIRouter()
 )
 async def create_assignment(
     request: AssignmentCreateRequest,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(must_be_teacher=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AssignmentTeacherResponse:
-    if not context.is_teacher_of_class:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala pode cadastrar atividades."
-        )
-
     assignment = await assignment_service.create_assignment(
         context.classroom, request, db
     )
@@ -52,14 +48,11 @@ async def create_assignment(
     summary="Lista todas as atividades da turma com sanitização para alunos",
 )
 async def list_assignments(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AssignmentTeacherResponse | AssignmentStudentResponse]:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não é membro nem responsável por esta sala de aula."
-        )
-
     assignments = await assignment_service.list_assignments_by_classroom(
         context.classroom.id, db
     )
@@ -74,13 +67,10 @@ async def list_assignments(
     summary="Consulta detalhes da atividade com proteção contra vazamento de gabaritos",
 )
 async def get_assignment(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext, Depends(require_assignment_permission(can_view=True))
+    ],
 ) -> AssignmentTeacherResponse | AssignmentStudentResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não possui permissão para visualizar esta atividade."
-        )
-
     return assignment_service.serialize_assignment_for_member(
         context.assignment, is_student=context.is_enrolled_student
     )
@@ -93,14 +83,11 @@ async def get_assignment(
 )
 async def update_assignment(
     request: AssignmentUpdateRequest,
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext, Depends(require_assignment_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AssignmentTeacherResponse:
-    if not context.can_manage:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala pode editar esta atividade."
-        )
-
     updated = await assignment_service.update_assignment(
         context.assignment, request, db
     )
@@ -113,14 +100,11 @@ async def update_assignment(
     summary="Exclui atividade (bloqueado se houver submissões ativas)",
 )
 async def delete_assignment(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext, Depends(require_assignment_permission(can_manage=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    if not context.can_manage:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala pode excluir esta atividade."
-        )
-
     await assignment_service.delete_assignment(context.assignment, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -133,13 +117,10 @@ async def delete_assignment(
 )
 async def test_run_assignment(
     request: TestRunRequest,
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext, Depends(require_assignment_permission(can_view=True))
+    ],
 ) -> TestRunResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não possui permissão para executar código nesta atividade."
-        )
-
     return await runner_service.execute_test_run(
         assignment=context.assignment,
         request=request,

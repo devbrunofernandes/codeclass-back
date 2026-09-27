@@ -1935,6 +1935,7 @@ async def test_save_draft_submission_when_assignment_not_found_should_return_404
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enrolled_student")
 async def test_save_draft_submission_when_malformed_body_should_return_422(
     async_client: AsyncClient,
     tenant: TenantContext,

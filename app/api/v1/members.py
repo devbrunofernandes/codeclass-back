@@ -8,7 +8,7 @@ from app.api.deps import (
     get_current_active_member,
     get_db,
     require_admin_or_owner,
-    verify_org_access,
+    require_org_member,
 )
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
@@ -20,7 +20,7 @@ from app.schemas.organization import (
 )
 from app.services.member_service import member_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_org_member)])
 
 
 @router.post(
@@ -35,7 +35,6 @@ async def add_member(
     current_member: Annotated[OrganizationMember, Depends(require_admin_or_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationMemberResponse:
-    await verify_org_access(org_id, current_member)
     return await member_service.add_member(
         org_id=org_id,
         request=request,
@@ -59,7 +58,6 @@ async def list_members(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> list[OrganizationMemberResponse]:
-    await verify_org_access(org_id, current_member)
     return await member_service.list_members(
         org_id=org_id,
         db=db,
@@ -83,7 +81,6 @@ async def update_member_role(
     current_member: Annotated[OrganizationMember, Depends(require_admin_or_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationMemberResponse:
-    await verify_org_access(org_id, current_member)
     return await member_service.update_member_role(
         org_id=org_id,
         user_id=user_id,
@@ -105,7 +102,6 @@ async def update_member_status(
     current_member: Annotated[OrganizationMember, Depends(require_admin_or_owner)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationMemberResponse:
-    await verify_org_access(org_id, current_member)
     return await member_service.update_member_status(
         org_id=org_id,
         user_id=user_id,

@@ -12,7 +12,7 @@ from supabase import Client, ClientOptions, create_client
 
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB conforme HLD (RF23)
+MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB
 CLASSROOM_MATERIALS_BUCKET = "classroom-materials"
 
 
@@ -43,7 +43,7 @@ class StorageService:
         classroom_id: UUID,
         file: UploadFile,
     ) -> dict[str, Any]:
-        """Faz upload de material didático em streaming com validação de 30MB (RNF/HLD 9.3)."""
+        """Faz upload de material didático em streaming com validação de limite de 30MB."""
         raw_name = Path(file.filename or "unnamed_file").name
         safe_file_name = raw_name.replace("/", "_").replace("\\", "_")
         if not safe_file_name or safe_file_name in (".", ".."):

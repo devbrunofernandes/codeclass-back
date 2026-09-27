@@ -13,11 +13,10 @@ logger = logging.getLogger(__name__)
 
 from app.api.deps import (
     ClassroomContext,
-    get_classroom_context,
     get_db,
+    require_classroom_permission,
 )
 from app.core.database import async_session_maker
-from app.core.exceptions import ForbiddenException
 from app.infrastructure.auth import auth_service
 from app.infrastructure.realtime import connection_manager
 from app.models.classroom import Classroom, ClassroomStudent
@@ -41,16 +40,13 @@ router = APIRouter(prefix="/classrooms")
 )
 async def list_messages(
     classroom_id: UUID,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     before: Annotated[datetime | None, Query()] = None,
 ) -> list[ChatMessageResponse]:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não tem permissão para visualizar o chat desta sala de aula."
-        )
-
     messages = await chat_service.list_messages(
         classroom_id=classroom_id,
         limit=limit,
@@ -69,14 +65,11 @@ async def list_messages(
 async def send_message(
     classroom_id: UUID,
     payload: ChatMessageCreate,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatMessageResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não tem permissão para enviar mensagens nesta sala de aula."
-        )
-
     msg = await chat_service.send_message(
         classroom_id=classroom_id,
         sender_id=context.current_member.user_id,
@@ -95,14 +88,11 @@ async def edit_message(
     classroom_id: UUID,
     message_id: UUID,
     payload: ChatMessageUpdate,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatMessageResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não tem permissão para interagir nesta sala de aula."
-        )
-
     msg = await chat_service.edit_message(
         classroom_id=classroom_id,
         message_id=message_id,
@@ -121,14 +111,11 @@ async def edit_message(
 async def delete_message(
     classroom_id: UUID,
     message_id: UUID,
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MessageDeletedEvent:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não tem permissão para interagir nesta sala de aula."
-        )
-
     msg = await chat_service.delete_message(
         classroom_id=classroom_id,
         message_id=message_id,

@@ -8,13 +8,12 @@ from app.api.deps import (
     AssignmentContext,
     ClassroomContext,
     SubmissionContext,
-    get_assignment_context,
-    get_classroom_context,
     get_current_active_member,
     get_db,
-    get_submission_context,
+    require_assignment_permission,
+    require_classroom_permission,
+    require_submission_permission,
 )
-from app.core.exceptions import ForbiddenException
 from app.models.enums import OrgRole, SubmissionStatus
 from app.models.organization import OrganizationMember
 from app.schemas.evaluation import (
@@ -46,15 +45,13 @@ router = APIRouter()
 )
 async def submit_assignment(
     request: SubmissionCreateRequest,
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_enrolled_student=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ) -> SubmissionStudentResponse:
-    if not context.is_enrolled_student:
-        raise ForbiddenException(
-            "Acesso negado: apenas alunos matriculados na sala de aula podem submeter atividades."
-        )
-
     sub = await submission_service.submit_assignment(
         context.assignment,
         context.current_member.user_id,
@@ -72,14 +69,12 @@ async def submit_assignment(
     summary="Desfaz entrega formal no prazo, preservando o conteúdo e transitando para draft",
 )
 async def unsubmit_assignment(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_enrolled_student=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStudentResponse:
-    if not context.is_enrolled_student:
-        raise ForbiddenException(
-            "Acesso negado: apenas alunos matriculados na sala de aula podem desfazer entregas."
-        )
-
     sub = await submission_service.unsubmit_assignment(
         context.assignment, context.current_member.user_id, db
     )
@@ -94,14 +89,12 @@ async def unsubmit_assignment(
 )
 async def save_draft_submission(
     request: SubmissionDraftRequest,
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_enrolled_student=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStudentResponse:
-    if not context.is_enrolled_student:
-        raise ForbiddenException(
-            "Acesso negado: apenas alunos matriculados na sala de aula podem salvar rascunhos."
-        )
-
     sub = await submission_service.save_draft_submission(
         assignment=context.assignment,
         student_id=context.current_member.user_id,
@@ -182,7 +175,9 @@ async def list_global_submissions(
     summary="Lista submissões da sala de aula com filtros por status, estudante ou busca textual",
 )
 async def list_classroom_submissions(
-    context: Annotated[ClassroomContext, Depends(get_classroom_context)],
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     submission_status: Annotated[
         SubmissionStatus | None,
@@ -202,11 +197,6 @@ async def list_classroom_submissions(
     ] = None,
 ) -> list[SubmissionSummaryTeacherResponse | SubmissionSummaryStudentResponse]:
     is_staff = context.can_manage_classroom
-    if not (is_staff or context.is_enrolled_student):
-        raise ForbiddenException(
-            "Acesso negado: apenas membros da sala de aula podem listar submissões."
-        )
-
     student_id_filter: UUID | None = (
         student_id if is_staff else context.current_member.user_id
     )
@@ -234,7 +224,9 @@ async def list_classroom_submissions(
     summary="Lista submissões da tarefa com filtros por status, estudante ou termo de busca",
 )
 async def list_submissions(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext, Depends(require_assignment_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     submission_status: Annotated[
         SubmissionStatus | None,
@@ -254,11 +246,6 @@ async def list_submissions(
     ] = None,
 ) -> list[SubmissionSummaryTeacherResponse | SubmissionSummaryStudentResponse]:
     is_staff = context.is_teacher_of_class or context.is_admin or context.is_owner
-    if not (is_staff or context.is_enrolled_student):
-        raise ForbiddenException(
-            "Acesso negado: apenas membros da sala de aula podem listar submissões."
-        )
-
     student_id_filter: UUID | None = (
         student_id if is_staff else context.current_member.user_id
     )
@@ -283,13 +270,10 @@ async def list_submissions(
     summary="Detalha submissão para docentes e alunos (com segregação estrita de IA e retenção de notas)",
 )
 async def get_submission(
-    context: Annotated[SubmissionContext, Depends(get_submission_context)],
+    context: Annotated[
+        SubmissionContext, Depends(require_submission_permission(can_view=True))
+    ],
 ) -> SubmissionDetailTeacherResponse | SubmissionDetailStudentResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não possui permissão para visualizar esta submissão."
-        )
-
     return submission_service.get_submission_detail(
         context.submission,
         can_view_ai_insights=context.can_view_ai_insights,
@@ -303,15 +287,13 @@ async def get_submission(
     summary="Reinicia a análise assíncrona de IA para uma submissão",
 )
 async def retry_ai_evaluation(
-    context: Annotated[SubmissionContext, Depends(get_submission_context)],
+    context: Annotated[
+        SubmissionContext,
+        Depends(require_submission_permission(can_view_ai_insights=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ) -> SubmissionDetailTeacherResponse:
-    if not context.can_view_ai_insights:
-        raise ForbiddenException(
-            "Acesso negado: apenas o docente responsável ou a coordenação podem solicitar nova avaliação da IA."
-        )
-
     sub = await submission_service.retry_ai_evaluation(
         submission=context.submission,
         db=db,
@@ -328,14 +310,12 @@ async def retry_ai_evaluation(
 )
 async def evaluate_submission(
     request: SubmissionEvaluationRequest,
-    context: Annotated[SubmissionContext, Depends(get_submission_context)],
+    context: Annotated[
+        SubmissionContext,
+        Depends(require_submission_permission(can_evaluate=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionEvaluationResponse:
-    if not context.can_evaluate:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala de aula pode registrar avaliações."
-        )
-
     evaluation = await submission_service.evaluate_submission(
         submission=context.submission,
         request=request,
@@ -351,14 +331,11 @@ async def evaluate_submission(
     summary="Consulta a avaliação formal realizada pelo professor (notas e parecer autoral)",
 )
 async def get_submission_evaluation(
-    context: Annotated[SubmissionContext, Depends(get_submission_context)],
+    context: Annotated[
+        SubmissionContext, Depends(require_submission_permission(can_view=True))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionEvaluationResponse:
-    if not context.can_view:
-        raise ForbiddenException(
-            "Acesso negado: você não possui permissão para visualizar a avaliação desta submissão."
-        )
-
     is_teacher_or_admin = (
         context.is_teacher_of_class or context.is_admin or context.is_owner
     )
@@ -378,15 +355,13 @@ async def get_submission_evaluation(
     summary="Publica em lote avaliações com correção já registrada na tarefa (todas ou seletivas)",
 )
 async def publish_assignment_evaluations(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_teacher=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     request: BatchEvaluationReleaseRequest | None = None,
 ) -> BatchEvaluationReleaseResponse:
-    if not context.is_teacher_of_class:
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala de aula pode liberar as correções da tarefa."
-        )
-
     submission_ids = request.submission_ids if request else None
     count = await submission_service.publish_assignment_evaluations(
         assignment_id=context.assignment.id,
@@ -407,14 +382,12 @@ async def publish_assignment_evaluations(
     summary="Obtém métricas executivas de correção e engajamento da tarefa",
 )
 async def get_assignment_submission_stats(
-    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    context: Annotated[
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_staff=True)),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStatsResponse:
-    if not (context.is_teacher_of_class or context.is_admin or context.is_owner):
-        raise ForbiddenException(
-            "Acesso negado: apenas o professor responsável pela sala de aula ou administradores podem consultar métricas da tarefa."
-        )
-
     return await submission_service.get_assignment_submission_stats(
         assignment=context.assignment,
         db=db,
