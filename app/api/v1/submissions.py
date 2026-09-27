@@ -32,7 +32,12 @@ from app.schemas.submission import (
     SubmissionSummaryStudentResponse,
     SubmissionSummaryTeacherResponse,
 )
-from app.services.submission_service import submission_service
+from app.services.submission import (
+    submission_ai_worker,
+    submission_evaluation_service,
+    submission_lifecycle_service,
+    submission_query_service,
+)
 
 router = APIRouter()
 
@@ -52,7 +57,7 @@ async def submit_assignment(
     db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ) -> SubmissionStudentResponse:
-    sub = await submission_service.submit_assignment(
+    sub = await submission_lifecycle_service.submit_assignment(
         context.assignment,
         context.current_member.user_id,
         request,
@@ -75,7 +80,7 @@ async def unsubmit_assignment(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStudentResponse:
-    sub = await submission_service.unsubmit_assignment(
+    sub = await submission_lifecycle_service.unsubmit_assignment(
         context.assignment, context.current_member.user_id, db
     )
     return SubmissionStudentResponse.model_validate(sub)
@@ -95,7 +100,7 @@ async def save_draft_submission(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStudentResponse:
-    sub = await submission_service.save_draft_submission(
+    sub = await submission_lifecycle_service.save_draft_submission(
         assignment=context.assignment,
         student_id=context.current_member.user_id,
         request=request,
@@ -150,7 +155,7 @@ async def list_global_submissions(
     teacher_id: UUID | None = current_member.user_id if is_teacher else None
     search_filter: str | None = None if is_student else q
 
-    submissions = await submission_service.list_submissions(
+    submissions = await submission_query_service.list_submissions(
         assignment_id=assignment_id,
         status_filter=submission_status,
         db=db,
@@ -202,7 +207,7 @@ async def list_classroom_submissions(
     )
     search_query_filter: str | None = q if is_staff else None
 
-    submissions = await submission_service.list_submissions(
+    submissions = await submission_query_service.list_submissions(
         classroom_id=context.classroom.id,
         status_filter=submission_status,
         student_id=student_id_filter,
@@ -251,7 +256,7 @@ async def list_submissions(
     )
     search_query_filter: str | None = q if is_staff else None
 
-    submissions = await submission_service.list_submissions(
+    submissions = await submission_query_service.list_submissions(
         assignment_id=context.assignment.id,
         status_filter=submission_status,
         student_id=student_id_filter,
@@ -274,7 +279,7 @@ async def get_submission(
         SubmissionContext, Depends(require_submission_permission(can_view=True))
     ],
 ) -> SubmissionDetailTeacherResponse | SubmissionDetailStudentResponse:
-    return submission_service.get_submission_detail(
+    return submission_query_service.get_submission_detail(
         context.submission,
         can_view_ai_insights=context.can_view_ai_insights,
     )
@@ -294,7 +299,7 @@ async def retry_ai_evaluation(
     db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ) -> SubmissionDetailTeacherResponse:
-    sub = await submission_service.retry_ai_evaluation(
+    sub = await submission_ai_worker.retry_ai_evaluation(
         submission=context.submission,
         db=db,
         background_tasks=background_tasks,
@@ -316,7 +321,7 @@ async def evaluate_submission(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionEvaluationResponse:
-    evaluation = await submission_service.evaluate_submission(
+    evaluation = await submission_evaluation_service.evaluate_submission(
         submission=context.submission,
         request=request,
         db=db,
@@ -339,7 +344,7 @@ async def get_submission_evaluation(
     is_teacher_or_admin = (
         context.is_teacher_of_class or context.is_admin or context.is_owner
     )
-    evaluation = await submission_service.get_submission_evaluation(
+    evaluation = await submission_evaluation_service.get_submission_evaluation(
         submission=context.submission,
         is_teacher_or_admin=is_teacher_or_admin,
         is_author=context.is_submission_author,
@@ -363,7 +368,7 @@ async def publish_assignment_evaluations(
     request: BatchEvaluationReleaseRequest | None = None,
 ) -> BatchEvaluationReleaseResponse:
     submission_ids = request.submission_ids if request else None
-    count = await submission_service.publish_assignment_evaluations(
+    count = await submission_evaluation_service.publish_assignment_evaluations(
         assignment_id=context.assignment.id,
         db=db,
         submission_ids=submission_ids,
@@ -388,7 +393,7 @@ async def get_assignment_submission_stats(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SubmissionStatsResponse:
-    return await submission_service.get_assignment_submission_stats(
+    return await submission_query_service.get_assignment_submission_stats(
         assignment=context.assignment,
         db=db,
     )

@@ -220,7 +220,7 @@ def mock_ai_service(
 
     mock_evaluate.side_effect = _default_evaluate
     monkeypatch.setattr(
-        "app.services.submission_service.ai_service.evaluate_submission",
+        "app.services.submission.ai_worker.ai_service.evaluate_submission",
         mock_evaluate,
     )
     monkeypatch.setattr(

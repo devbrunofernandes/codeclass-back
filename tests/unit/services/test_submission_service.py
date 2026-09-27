@@ -25,12 +25,19 @@ from app.schemas.submission import (
     QuestionnaireSubmissionDraftContent,
     SubmissionDraftRequest,
 )
-from app.services.submission_service import SubmissionService, submission_service
+from app.services.submission import (
+    SubmissionAiWorker,
+    SubmissionLifecycleService,
+    submission_ai_worker,
+    submission_evaluation_service,
+    submission_lifecycle_service,
+    submission_query_service,
+)
 from tests.fixtures.tenants import TenantContext
 
 
 def test_grade_objective_questionnaire_when_all_correct():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     questions = [
         {"id": 1, "type": "choice", "points": 5.0, "correct_option_id": "b"},
         {"id": 2, "type": "choice", "points": 5.0, "correct_option_id": "a"},
@@ -48,7 +55,7 @@ def test_grade_objective_questionnaire_when_all_correct():
 
 
 def test_grade_objective_questionnaire_when_partial_correct():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     questions = [
         {"id": 1, "type": "choice", "points": 4.0, "correct_option_id": "c"},
         {"id": 2, "type": "choice", "points": 6.0, "correct_option_id": "d"},
@@ -65,7 +72,7 @@ def test_grade_objective_questionnaire_when_partial_correct():
 
 
 def test_grade_objective_questionnaire_when_unanswered_question_should_score_zero():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     questions = [
         {"id": 1, "type": "choice", "points": 5.0, "correct_option_id": "a"},
         {"id": 2, "type": "choice", "points": 5.0, "correct_option_id": "b"},
@@ -81,7 +88,7 @@ def test_grade_objective_questionnaire_when_unanswered_question_should_score_zer
 
 
 def test_validate_code_submission_language_when_invalid_should_raise():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     allowed_langs = ["python3", "javascript"]
 
     with pytest.raises(BadRequestException):
@@ -89,7 +96,7 @@ def test_validate_code_submission_language_when_invalid_should_raise():
 
 
 def test_validate_code_submission_language_when_valid_should_pass():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     allowed_langs = ["python3", "javascript"]
 
     # Não deve levantar exceção
@@ -98,7 +105,7 @@ def test_validate_code_submission_language_when_valid_should_pass():
 
 @pytest.mark.asyncio
 async def test_process_submission_ai_task_when_not_pending_should_skip():
-    service = SubmissionService()
+    service = SubmissionAiWorker()
     sub_id = uuid.uuid4()
 
     mock_sub = MagicMock()
@@ -112,11 +119,11 @@ async def test_process_submission_ai_task_when_not_pending_should_skip():
 
     with (
         patch(
-            "app.services.submission_service.async_session_maker",
+            "app.services.submission.ai_worker.async_session_maker",
             return_value=mock_session,
         ),
         patch(
-            "app.services.submission_service.ai_service.evaluate_submission",
+            "app.services.submission.ai_worker.ai_service.evaluate_submission",
             new_callable=AsyncMock,
         ) as mock_ai,
     ):
@@ -128,7 +135,7 @@ async def test_process_submission_ai_task_when_not_pending_should_skip():
 
 @pytest.mark.asyncio
 async def test_process_submission_ai_task_when_success_should_update_insight_and_status():
-    service = SubmissionService()
+    service = SubmissionAiWorker()
     sub_id = uuid.uuid4()
 
     mock_sub = MagicMock()
@@ -154,11 +161,11 @@ async def test_process_submission_ai_task_when_success_should_update_insight_and
 
     with (
         patch(
-            "app.services.submission_service.async_session_maker",
+            "app.services.submission.ai_worker.async_session_maker",
             return_value=mock_session,
         ),
         patch(
-            "app.services.submission_service.ai_service.evaluate_submission",
+            "app.services.submission.ai_worker.ai_service.evaluate_submission",
             new_callable=AsyncMock,
         ) as mock_ai,
     ):
@@ -176,7 +183,7 @@ async def test_process_submission_ai_task_when_success_should_update_insight_and
 
 @pytest.mark.asyncio
 async def test_process_submission_ai_task_when_failure_should_fallback_to_failed_and_awaiting_review():
-    service = SubmissionService()
+    service = SubmissionAiWorker()
     sub_id = uuid.uuid4()
 
     mock_sub = MagicMock()
@@ -194,11 +201,11 @@ async def test_process_submission_ai_task_when_failure_should_fallback_to_failed
 
     with (
         patch(
-            "app.services.submission_service.async_session_maker",
+            "app.services.submission.ai_worker.async_session_maker",
             return_value=mock_session,
         ),
         patch(
-            "app.services.submission_service.ai_service.evaluate_submission",
+            "app.services.submission.ai_worker.ai_service.evaluate_submission",
             new_callable=AsyncMock,
         ) as mock_ai,
     ):
@@ -218,7 +225,7 @@ async def test_submit_assignment_idempotency_when_draft_code_identical_should_no
     from app.models.enums import ReleasePolicyType
     from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
 
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     assignment = Assignment(
         title="Busca Binária",
         description="Teste",
@@ -263,7 +270,7 @@ async def test_submit_assignment_when_draft_code_modified_should_enqueue_ai():
     from app.models.enums import ReleasePolicyType
     from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
 
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     assignment = Assignment(
         title="Busca Binária",
         description="Teste",
@@ -315,7 +322,7 @@ async def test_list_submissions_returns_all_and_filtered(
     submission_awaiting_review: Submission,
 ):
     # Lista sem filtro
-    all_subs = await submission_service.list_submissions(
+    all_subs = await submission_query_service.list_submissions(
         assignment_id=assignment_without_submissions.id,
         status_filter=None,
         db=db_session,
@@ -324,7 +331,7 @@ async def test_list_submissions_returns_all_and_filtered(
     assert any(s.id == submission_awaiting_review.id for s in all_subs)
 
     # Filtra por status awaiting_review
-    filtered_awaiting = await submission_service.list_submissions(
+    filtered_awaiting = await submission_query_service.list_submissions(
         assignment_id=assignment_without_submissions.id,
         status_filter=SubmissionStatus.AWAITING_REVIEW,
         db=db_session,
@@ -333,7 +340,7 @@ async def test_list_submissions_returns_all_and_filtered(
     assert all(s.status == SubmissionStatus.AWAITING_REVIEW for s in filtered_awaiting)
 
     # Filtra por status published (não deve achar a submissão awaiting_review)
-    filtered_published = await submission_service.list_submissions(
+    filtered_published = await submission_query_service.list_submissions(
         assignment_id=assignment_without_submissions.id,
         status_filter=SubmissionStatus.PUBLISHED,
         db=db_session,
@@ -353,7 +360,7 @@ async def test_evaluate_submission_when_publish_true_should_publish_and_set_grad
         publish=True,
     )
 
-    evaluation = await submission_service.evaluate_submission(
+    evaluation = await submission_evaluation_service.evaluate_submission(
         submission=submission_awaiting_review,
         request=req,
         db=db_session,
@@ -376,7 +383,7 @@ async def test_evaluate_submission_when_publish_false_should_retain_grade_in_awa
         publish=False,
     )
 
-    evaluation = await submission_service.evaluate_submission(
+    evaluation = await submission_evaluation_service.evaluate_submission(
         submission=submission_awaiting_review,
         request=req,
         db=db_session,
@@ -397,7 +404,7 @@ async def test_evaluate_submission_when_draft_should_raise_bad_request(
 
     req = SubmissionEvaluationRequest(grade=Decimal("10.00"))
     with pytest.raises(BadRequestException, match="rascunho"):
-        await submission_service.evaluate_submission(
+        await submission_evaluation_service.evaluate_submission(
             submission=submission_awaiting_review,
             request=req,
             db=db_session,
@@ -414,7 +421,7 @@ async def test_evaluate_submission_when_pending_should_raise_bad_request(
 
     req = SubmissionEvaluationRequest(grade=Decimal("10.00"))
     with pytest.raises(BadRequestException, match="processamento inicial"):
-        await submission_service.evaluate_submission(
+        await submission_evaluation_service.evaluate_submission(
             submission=submission_awaiting_review,
             request=req,
             db=db_session,
@@ -429,14 +436,14 @@ async def test_get_submission_evaluation_when_not_published_and_student_should_r
 ):
     # Avaliação registrada pelo professor mas com publish=False
     req = SubmissionEvaluationRequest(grade=Decimal("7.00"), publish=False)
-    await submission_service.evaluate_submission(
+    await submission_evaluation_service.evaluate_submission(
         submission=submission_awaiting_review,
         request=req,
         db=db_session,
     )
 
     # Professor ou admin pode ver
-    eval_teacher = await submission_service.get_submission_evaluation(
+    eval_teacher = await submission_evaluation_service.get_submission_evaluation(
         submission=submission_awaiting_review,
         is_teacher_or_admin=True,
         is_author=False,
@@ -446,7 +453,7 @@ async def test_get_submission_evaluation_when_not_published_and_student_should_r
 
     # Aluno autor tentando ver antes de publicada deve receber Forbidden
     with pytest.raises(ForbiddenException, match="publicada"):
-        await submission_service.get_submission_evaluation(
+        await submission_evaluation_service.get_submission_evaluation(
             submission=submission_awaiting_review,
             is_teacher_or_admin=False,
             is_author=True,
@@ -459,7 +466,7 @@ async def test_get_submission_evaluation_when_published_student_can_view(
     db_session: AsyncSession,
     submission_published: Submission,
 ):
-    eval_student = await submission_service.get_submission_evaluation(
+    eval_student = await submission_evaluation_service.get_submission_evaluation(
         submission=submission_published,
         is_teacher_or_admin=False,
         is_author=True,
@@ -475,7 +482,7 @@ async def test_get_submission_evaluation_when_not_found_should_raise_not_found(
 ):
     # Sem avaliação registrada
     with pytest.raises(NotFoundException, match="não encontrada"):
-        await submission_service.get_submission_evaluation(
+        await submission_evaluation_service.get_submission_evaluation(
             submission=submission_awaiting_review,
             is_teacher_or_admin=True,
             is_author=False,
@@ -488,7 +495,7 @@ async def test_get_submission_detail_when_teacher_should_include_ai_insight_and_
     db_session: AsyncSession,
     submission_awaiting_review: Submission,
 ):
-    detail = submission_service.get_submission_detail(
+    detail = submission_query_service.get_submission_detail(
         submission=submission_awaiting_review,
         is_student=False,
     )
@@ -506,7 +513,7 @@ async def test_get_submission_detail_when_student_and_not_published_should_mask_
     db_session: AsyncSession,
     submission_awaiting_review: Submission,
 ):
-    detail = submission_service.get_submission_detail(
+    detail = submission_query_service.get_submission_detail(
         submission=submission_awaiting_review,
         is_student=True,
     )
@@ -520,7 +527,7 @@ async def test_get_submission_detail_when_student_and_published_should_include_e
     db_session: AsyncSession,
     submission_published: Submission,
 ):
-    detail = submission_service.get_submission_detail(
+    detail = submission_query_service.get_submission_detail(
         submission=submission_published,
         is_student=True,
     )
@@ -536,7 +543,7 @@ async def test_list_submissions_filtering_by_student_id(
     submission_awaiting_review: Submission,
 ):
     # Lista com student_id correspondente
-    subs = await submission_service.list_submissions(
+    subs = await submission_query_service.list_submissions(
         assignment_id=submission_awaiting_review.assignment_id,
         status_filter=None,
         student_id=submission_awaiting_review.student_id,
@@ -546,7 +553,7 @@ async def test_list_submissions_filtering_by_student_id(
     assert subs[0].id == submission_awaiting_review.id
 
     # Lista com student_id aleatório/inexistente
-    subs_empty = await submission_service.list_submissions(
+    subs_empty = await submission_query_service.list_submissions(
         assignment_id=submission_awaiting_review.assignment_id,
         status_filter=None,
         student_id=uuid.uuid4(),
@@ -562,7 +569,7 @@ async def test_publish_assignment_evaluations_when_submissions_have_evaluations_
 ):
     # Avalia a submissão mantendo em rascunho (publish=False)
     eval_req = SubmissionEvaluationRequest(grade=Decimal("8.50"), publish=False)
-    await submission_service.evaluate_submission(
+    await submission_evaluation_service.evaluate_submission(
         submission=submission_awaiting_review,
         request=eval_req,
         db=db_session,
@@ -571,7 +578,7 @@ async def test_publish_assignment_evaluations_when_submissions_have_evaluations_
     assert submission_awaiting_review.grade is None
 
     # Dispara a publicação em lote
-    count = await submission_service.publish_assignment_evaluations(
+    count = await submission_evaluation_service.publish_assignment_evaluations(
         assignment_id=submission_awaiting_review.assignment_id,
         db=db_session,
     )
@@ -588,7 +595,7 @@ async def test_publish_assignment_evaluations_when_no_evaluation_exists_should_s
     submission_awaiting_review: Submission,
 ):
     # submission_awaiting_review não possui avaliação docente associada
-    count = await submission_service.publish_assignment_evaluations(
+    count = await submission_evaluation_service.publish_assignment_evaluations(
         assignment_id=submission_awaiting_review.assignment_id,
         db=db_session,
     )
@@ -640,7 +647,7 @@ async def test_publish_assignment_evaluations_with_selective_submission_ids(
     await db_session.commit()
 
     # Publica seletivamente apenas sub1
-    count = await submission_service.publish_assignment_evaluations(
+    count = await submission_evaluation_service.publish_assignment_evaluations(
         assignment_id=assignment_without_submissions.id,
         db=db_session,
         submission_ids=[sub1.id],
@@ -662,7 +669,7 @@ async def test_list_submissions_with_search_query(
 ):
     # Busca por parte do email ou nome do aluno da submissão
     student = submission_awaiting_review.student
-    subs = await submission_service.list_submissions(
+    subs = await submission_query_service.list_submissions(
         assignment_id=submission_awaiting_review.assignment_id,
         status_filter=None,
         db=db_session,
@@ -672,7 +679,7 @@ async def test_list_submissions_with_search_query(
     assert subs[0].id == submission_awaiting_review.id
 
     # Busca com termo que não existe
-    subs_empty = await submission_service.list_submissions(
+    subs_empty = await submission_query_service.list_submissions(
         assignment_id=submission_awaiting_review.assignment_id,
         status_filter=None,
         db=db_session,
@@ -732,7 +739,7 @@ async def test_get_assignment_submission_stats(
     )
     await db_session.commit()
 
-    stats = await submission_service.get_assignment_submission_stats(
+    stats = await submission_query_service.get_assignment_submission_stats(
         assignment=assignment_without_submissions,
         db=db_session,
     )
@@ -751,7 +758,7 @@ async def test_list_submissions_with_classroom_and_org_filters(
     assignment_with_submissions: Assignment,
 ):
     # Filtro por classroom_id e organization_id correspondente
-    subs = await submission_service.list_submissions(
+    subs = await submission_query_service.list_submissions(
         db=db_session,
         classroom_id=assignment_with_submissions.classroom_id,
         organization_id=assignment_with_submissions.classroom.organization_id,
@@ -764,14 +771,14 @@ async def test_list_submissions_with_classroom_and_org_filters(
     )
 
     # Filtro por classroom_id aleatório/inexistente
-    subs_empty = await submission_service.list_submissions(
+    subs_empty = await submission_query_service.list_submissions(
         db=db_session,
         classroom_id=uuid.uuid4(),
     )
     assert len(subs_empty) == 0
 
     # Filtro por organization_id aleatório/inexistente
-    subs_wrong_org = await submission_service.list_submissions(
+    subs_wrong_org = await submission_query_service.list_submissions(
         db=db_session,
         organization_id=uuid.uuid4(),
     )
@@ -788,7 +795,7 @@ async def test_list_submissions_with_teacher_and_enrolled_student_filters(
     student_id = submission_awaiting_review.student_id
 
     # Filtro por teacher_id correto
-    subs_teacher = await submission_service.list_submissions(
+    subs_teacher = await submission_query_service.list_submissions(
         db=db_session,
         teacher_id=teacher_id,
     )
@@ -796,7 +803,7 @@ async def test_list_submissions_with_teacher_and_enrolled_student_filters(
     assert any(s.id == submission_awaiting_review.id for s in subs_teacher)
 
     # Filtro por enrolled_student_id
-    subs_student = await submission_service.list_submissions(
+    subs_student = await submission_query_service.list_submissions(
         db=db_session,
         enrolled_student_id=student_id,
         student_id=student_id,
@@ -805,7 +812,7 @@ async def test_list_submissions_with_teacher_and_enrolled_student_filters(
     assert all(s.student_id == student_id for s in subs_student)
 
     # Filtro por enrolled_student_id inexistente
-    subs_none = await submission_service.list_submissions(
+    subs_none = await submission_query_service.list_submissions(
         db=db_session,
         enrolled_student_id=uuid.uuid4(),
     )
@@ -815,14 +822,14 @@ async def test_list_submissions_with_teacher_and_enrolled_student_filters(
 @pytest.mark.asyncio
 async def test_list_submissions_without_db_raises_value_error():
     with pytest.raises(ValueError, match="Database session is required"):
-        await submission_service.list_submissions(db=None)
+        await submission_query_service.list_submissions(db=None)
 
 
 @pytest.mark.asyncio
 async def test_get_submission_detail_includes_assignment_info(
     submission_awaiting_review: Submission,
 ):
-    detail = submission_service.get_submission_detail(
+    detail = submission_query_service.get_submission_detail(
         submission=submission_awaiting_review,
         is_student=False,
     )
@@ -850,7 +857,7 @@ async def test_save_draft_submission_when_new_should_create_draft(
         )
     )
 
-    sub = await submission_service.save_draft_submission(
+    sub = await submission_lifecycle_service.save_draft_submission(
         assignment=assignment_without_submissions,
         student_id=tenant.student.user.id,
         request=request,
@@ -873,7 +880,7 @@ async def test_save_draft_submission_when_draft_already_exists_should_update(
     req1 = SubmissionDraftRequest(
         content=CodeSubmissionDraftContent(language="python3", code="pass")
     )
-    sub1 = await submission_service.save_draft_submission(
+    sub1 = await submission_lifecycle_service.save_draft_submission(
         assignment=assignment_without_submissions,
         student_id=tenant.student.user.id,
         request=req1,
@@ -886,7 +893,7 @@ async def test_save_draft_submission_when_draft_already_exists_should_update(
             language="python3", code="def updated(): return 42"
         )
     )
-    sub2 = await submission_service.save_draft_submission(
+    sub2 = await submission_lifecycle_service.save_draft_submission(
         assignment=assignment_without_submissions,
         student_id=tenant.student.user.id,
         request=req2,
@@ -918,7 +925,7 @@ async def test_save_draft_submission_when_already_submitted_pending_should_raise
         content=CodeSubmissionDraftContent(language="python3", code="novo")
     )
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=req,
@@ -947,7 +954,7 @@ async def test_save_draft_submission_when_already_published_should_raise_bad_req
         content=CodeSubmissionDraftContent(language="python3", code="novo")
     )
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=req,
@@ -970,7 +977,7 @@ async def test_save_draft_submission_when_deadline_expired_should_raise_bad_requ
         content=CodeSubmissionDraftContent(language="python3", code="pass")
     )
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=req,
@@ -990,7 +997,7 @@ async def test_save_draft_submission_when_type_mismatch_should_raise_bad_request
         content=QuestionnaireSubmissionDraftContent(answers=[])
     )
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=req,
@@ -1009,7 +1016,7 @@ async def test_save_draft_submission_when_disallowed_language_should_raise_bad_r
         content=CodeSubmissionDraftContent(language="ruby", code="puts 1")
     )
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=req,
@@ -1031,7 +1038,7 @@ async def test_retry_ai_evaluation_when_published_should_raise_bad_request(
 
     bg_tasks = BackgroundTasks()
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.retry_ai_evaluation(
+        await submission_ai_worker.retry_ai_evaluation(
             submission=submission_awaiting_review,
             db=db_session,
             background_tasks=bg_tasks,
@@ -1051,7 +1058,7 @@ async def test_retry_ai_evaluation_when_draft_should_raise_bad_request(
 
     bg_tasks = BackgroundTasks()
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.retry_ai_evaluation(
+        await submission_ai_worker.retry_ai_evaluation(
             submission=submission_awaiting_review,
             db=db_session,
             background_tasks=bg_tasks,
@@ -1078,7 +1085,7 @@ async def test_retry_ai_evaluation_when_objective_questionnaire_should_raise_bad
 
     bg_tasks = BackgroundTasks()
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.retry_ai_evaluation(
+        await submission_ai_worker.retry_ai_evaluation(
             submission=sub,
             db=db_session,
             background_tasks=bg_tasks,
@@ -1105,7 +1112,7 @@ async def test_retry_ai_evaluation_success_schedules_task(
     await db_session.commit()
 
     bg_tasks = BackgroundTasks()
-    sub = await submission_service.retry_ai_evaluation(
+    sub = await submission_ai_worker.retry_ai_evaluation(
         submission=submission_awaiting_review,
         db=db_session,
         background_tasks=bg_tasks,
@@ -1128,7 +1135,7 @@ async def test_retry_ai_evaluation_when_already_pending_should_raise_bad_request
 
     bg_tasks = BackgroundTasks()
     with pytest.raises(BadRequestException) as exc_info:
-        await submission_service.retry_ai_evaluation(
+        await submission_ai_worker.retry_ai_evaluation(
             submission=submission_awaiting_review,
             db=db_session,
             background_tasks=bg_tasks,
@@ -1137,7 +1144,7 @@ async def test_retry_ai_evaluation_when_already_pending_should_raise_bad_request
 
 
 def test_validate_code_content_empty_or_whitespace_raises_bad_request():
-    service = SubmissionService()
+    service = SubmissionLifecycleService()
     with pytest.raises(
         BadRequestException, match="Linguagem e código são obrigatórios."
     ):
@@ -1160,7 +1167,7 @@ async def test_retry_ai_evaluation_when_insight_is_none_creates_new_insight(
         await db_session.commit()
 
     bg_tasks = BackgroundTasks()
-    sub = await submission_service.retry_ai_evaluation(
+    sub = await submission_ai_worker.retry_ai_evaluation(
         submission=submission_awaiting_review,
         db=db_session,
         background_tasks=bg_tasks,
@@ -1200,7 +1207,7 @@ async def test_save_draft_submission_concurrent_race_integrity_error_recovery(
         "commit",
         side_effect=[IntegrityError("conflict", orig=MagicMock(), params={}), None],
     ):
-        sub = await submission_service.save_draft_submission(
+        sub = await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=draft_req,
@@ -1240,7 +1247,7 @@ async def test_save_draft_submission_concurrent_race_when_published_raises_bad_r
         ),
         pytest.raises(BadRequestException, match="já foi corrigida e avaliada"),
     ):
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=draft_req,
@@ -1279,7 +1286,7 @@ async def test_save_draft_submission_concurrent_race_when_pending_raises_bad_req
         ),
         pytest.raises(BadRequestException, match="já foi submetida formalmente"),
     ):
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_without_submissions,
             student_id=tenant.student.user.id,
             request=draft_req,
@@ -1303,7 +1310,7 @@ async def test_save_draft_submission_questionnaire_with_code_content_raises_bad_
     with pytest.raises(
         BadRequestException, match="esperado rascunho de respostas de questionário"
     ):
-        await submission_service.save_draft_submission(
+        await submission_lifecycle_service.save_draft_submission(
             assignment=assignment_with_submissions,
             student_id=tenant.student.user.id,
             request=draft_req,
