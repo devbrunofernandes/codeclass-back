@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_member, get_current_user, get_db
 from app.core.exceptions import ForbiddenException
+from app.infrastructure.auth import auth_service
 from app.models.organization import OrganizationMember
 from app.models.user import User
 from app.schemas.user import (
@@ -16,7 +17,6 @@ from app.schemas.user import (
     UserLoginRequest,
     UserResponse,
 )
-from app.services.auth_service import auth_service
 
 router = APIRouter()
 

@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
+from app.infrastructure.runner.base import CodeRunnerProvider
 from app.models.enums import TestRunVerdict
 from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult
-from app.services.runner.base import CodeRunnerProvider
 
 
 class MockRunnerProvider(CodeRunnerProvider):
@@ -123,7 +123,7 @@ def override_runner_provider(
     """Sobrescreve o provedor de runner em todos os testes para garantir isolamento de rede."""
     runner_service.provider = mock_runner_provider
     with patch(
-        "app.services.runner.factory.get_runner_provider",
+        "app.infrastructure.runner.factory.get_runner_provider",
         return_value=mock_runner_provider,
     ):
         yield mock_runner_provider

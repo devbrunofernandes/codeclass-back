@@ -10,6 +10,7 @@ from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
+from app.infrastructure.realtime import connection_manager
 from app.models.chat import ClassroomMessage
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
@@ -19,7 +20,6 @@ from app.schemas.message import (
     ChatMessageSenderResponse,
     MessageDeletedEvent,
 )
-from app.services.websocket_manager import connection_manager
 
 
 class ChatService:

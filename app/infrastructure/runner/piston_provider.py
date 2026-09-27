@@ -9,10 +9,10 @@ from app.core.exceptions import (
     RunnerError,
     RunnerTimeoutError,
 )
+from app.infrastructure.runner.base import CodeRunnerProvider
 from app.models.enums import TestRunVerdict
 from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult
-from app.services.runner.base import CodeRunnerProvider
 
 
 class PistonProvider(CodeRunnerProvider):

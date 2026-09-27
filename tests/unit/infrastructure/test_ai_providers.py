@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from app.services.ai.factory import get_ai_provider
-from app.services.ai.gemini_provider import GeminiProvider
+from app.infrastructure.ai.factory import get_ai_provider
+from app.infrastructure.ai.gemini_provider import GeminiProvider
 
 
 class DummySchema(BaseModel):
@@ -15,7 +15,7 @@ class DummySchema(BaseModel):
 def test_gemini_provider_get_client_without_api_key_raises_error():
     provider = GeminiProvider()
     with (
-        patch("app.services.ai.gemini_provider.settings.AI_API_KEY", ""),
+        patch("app.infrastructure.ai.gemini_provider.settings.AI_API_KEY", ""),
         pytest.raises(
             RuntimeError,
             match="Chave de API de IA",
@@ -27,8 +27,8 @@ def test_gemini_provider_get_client_without_api_key_raises_error():
 def test_gemini_provider_get_client_success():
     provider = GeminiProvider()
     with (
-        patch("app.services.ai.gemini_provider.settings.AI_API_KEY", "test-key"),
-        patch("app.services.ai.gemini_provider.genai.Client") as mock_client_cls,
+        patch("app.infrastructure.ai.gemini_provider.settings.AI_API_KEY", "test-key"),
+        patch("app.infrastructure.ai.gemini_provider.genai.Client") as mock_client_cls,
     ):
         client = provider._get_client()
         mock_client_cls.assert_called_once_with(api_key="test-key")
@@ -103,18 +103,20 @@ async def test_gemini_provider_generate_structured_insight_empty_response_raises
 
 
 def test_get_ai_provider_gemini():
-    with patch("app.services.ai.factory.settings.AI_PROVIDER", "gemini"):
+    with patch("app.infrastructure.ai.factory.settings.AI_PROVIDER", "gemini"):
         provider = get_ai_provider()
         assert isinstance(provider, GeminiProvider)
 
-    with patch("app.services.ai.factory.settings.AI_PROVIDER", "GEMINI"):
+    with patch("app.infrastructure.ai.factory.settings.AI_PROVIDER", "GEMINI"):
         provider = get_ai_provider()
         assert isinstance(provider, GeminiProvider)
 
 
 def test_get_ai_provider_unsupported_raises_error():
     with (
-        patch("app.services.ai.factory.settings.AI_PROVIDER", "unsupported_provider"),
+        patch(
+            "app.infrastructure.ai.factory.settings.AI_PROVIDER", "unsupported_provider"
+        ),
         pytest.raises(ValueError, match="Provedor de IA não suportado"),
     ):
         get_ai_provider()

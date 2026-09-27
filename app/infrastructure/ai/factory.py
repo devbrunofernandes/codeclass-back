@@ -1,6 +1,6 @@
 from app.core.config import settings
-from app.services.ai.base import AiProvider
-from app.services.ai.gemini_provider import GeminiProvider
+from app.infrastructure.ai.base import AiProvider
+from app.infrastructure.ai.gemini_provider import GeminiProvider
 
 
 def get_ai_provider() -> AiProvider:

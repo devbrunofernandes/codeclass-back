@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.auth_service import auth_service
+from app.infrastructure.auth import auth_service
 from tests.conftest import TenantContext
 
 

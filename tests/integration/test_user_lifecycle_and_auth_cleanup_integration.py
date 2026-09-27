@@ -6,9 +6,10 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AuthError
+from app.infrastructure.auth import auth_service
 from app.models.organization import Organization
 from app.models.user import User
-from app.services.auth_service import AuthError, auth_service
 from tests.integration.conftest import OrgContext
 
 

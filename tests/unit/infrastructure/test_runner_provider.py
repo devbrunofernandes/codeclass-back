@@ -9,11 +9,11 @@ from app.core.exceptions import (
     RunnerError,
     RunnerTimeoutError,
 )
+from app.infrastructure.runner.factory import get_runner_provider
+from app.infrastructure.runner.judge0_provider import Judge0Provider
+from app.infrastructure.runner.piston_provider import PistonProvider
 from app.models.enums import TestRunVerdict
 from app.schemas.assignment import TestCaseConfig
-from app.services.runner.factory import get_runner_provider
-from app.services.runner.judge0_provider import Judge0Provider
-from app.services.runner.piston_provider import PistonProvider
 
 
 def test_factory_returns_judge0_provider() -> None:

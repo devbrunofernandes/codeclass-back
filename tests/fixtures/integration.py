@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 import pytest
 from httpx import AsyncClient
 
-from app.services.auth_service import AuthError, auth_service
+from app.core.exceptions import AuthError
+from app.infrastructure.auth import auth_service
 
 
 @dataclass

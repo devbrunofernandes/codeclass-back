@@ -2,11 +2,11 @@ import time
 from typing import Any
 
 from app.core.exceptions import BadRequestException
+from app.infrastructure.runner.factory import get_runner_provider
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, TestRunVerdict
 from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult, TestRunRequest, TestRunResponse
-from app.services.runner.factory import get_runner_provider
 
 
 class RunnerService:

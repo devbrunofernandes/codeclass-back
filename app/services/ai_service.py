@@ -3,10 +3,10 @@ import logging
 from decimal import Decimal
 from typing import Any
 
+from app.infrastructure.ai import AiProvider, get_ai_provider
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType
 from app.schemas.submission import AiInsightResult
-from app.services.ai import AiProvider, get_ai_provider
 
 logger = logging.getLogger(__name__)
 

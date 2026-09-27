@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppException, AuthError, NotFoundException
+from app.infrastructure.auth import auth_service
 from app.models.organization import OrganizationMember
 from app.models.user import User
-from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 

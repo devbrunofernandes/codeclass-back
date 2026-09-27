@@ -7,7 +7,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.services.ai.base import AiProvider
+from app.infrastructure.ai.base import AiProvider
 
 logger = logging.getLogger(__name__)
 

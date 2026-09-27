@@ -4,7 +4,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.core.exceptions import AppException, ConflictException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    AuthError,
+    ConflictException,
+    NotFoundException,
+)
+from app.infrastructure.auth import auth_service
 from app.models.enums import OrgRole
 from app.models.organization import Organization
 from app.schemas.organization import (
@@ -13,7 +19,6 @@ from app.schemas.organization import (
     TransferOwnershipRequest,
 )
 from app.schemas.user import UserCreate
-from app.services.auth_service import AuthError, auth_service
 from app.services.organization_service import OrganizationService
 
 

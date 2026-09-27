@@ -18,6 +18,8 @@ from app.api.deps import (
 )
 from app.core.database import async_session_maker
 from app.core.exceptions import ForbiddenException
+from app.infrastructure.auth import auth_service
+from app.infrastructure.realtime import connection_manager
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
@@ -27,9 +29,7 @@ from app.schemas.message import (
     ChatMessageUpdate,
     MessageDeletedEvent,
 )
-from app.services.auth_service import auth_service
 from app.services.chat_service import chat_service
-from app.services.websocket_manager import connection_manager
 
 router = APIRouter(prefix="/classrooms")
 

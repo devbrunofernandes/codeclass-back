@@ -14,6 +14,7 @@ from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
+from app.infrastructure.auth import auth_service
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
 from app.models.user import User
@@ -23,7 +24,6 @@ from app.schemas.organization import (
     OrganizationMemberCreate,
     OrganizationMemberResponse,
 )
-from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 

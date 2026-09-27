@@ -6,7 +6,7 @@ from jose import jwt
 
 from app.core.config import settings
 from app.core.exceptions import AuthError
-from app.services.auth_service import AuthService
+from app.infrastructure.auth.supabase_auth import AuthService
 
 
 @pytest.fixture
@@ -36,7 +36,9 @@ def test_create_raw_client_success(
     monkeypatch.setattr(settings, "SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setattr(settings, "SUPABASE_KEY", "example-anon-key")
     mock_create = MagicMock()
-    monkeypatch.setattr("app.services.auth_service.create_client", mock_create)
+    monkeypatch.setattr(
+        "app.infrastructure.auth.supabase_auth.create_client", mock_create
+    )
 
     client = auth_svc._create_raw_client()
     assert client is mock_create.return_value

@@ -15,13 +15,13 @@ from app.core.exceptions import (
     NotFoundException,
     UnauthorizedException,
 )
+from app.infrastructure.auth import auth_service
 from app.models.assignment import Assignment
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import OrgRole
 from app.models.organization import OrganizationMember
 from app.models.submission import Submission
 from app.models.user import User
-from app.services.auth_service import auth_service
 
 security = HTTPBearer(auto_error=True)
 

@@ -1,5 +1,5 @@
 from app.core.config import settings
-from app.services.runner.base import CodeRunnerProvider
+from app.infrastructure.runner.base import CodeRunnerProvider
 
 
 def get_runner_provider() -> CodeRunnerProvider:
@@ -7,12 +7,12 @@ def get_runner_provider() -> CodeRunnerProvider:
     provider_name = (settings.RUNNER_PROVIDER or "judge0").lower()
 
     if provider_name == "judge0":
-        from app.services.runner.judge0_provider import Judge0Provider
+        from app.infrastructure.runner.judge0_provider import Judge0Provider
 
         return Judge0Provider()
 
     if provider_name == "piston":
-        from app.services.runner.piston_provider import PistonProvider
+        from app.infrastructure.runner.piston_provider import PistonProvider
 
         return PistonProvider()
 

@@ -13,6 +13,7 @@ from app.core.exceptions import (
     ConflictException,
     NotFoundException,
 )
+from app.infrastructure.auth import auth_service
 from app.models.enums import OrgRole
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
@@ -22,7 +23,6 @@ from app.schemas.organization import (
     OrganizationUpdateRequest,
     TransferOwnershipRequest,
 )
-from app.services.auth_service import auth_service
 
 logger = logging.getLogger(__name__)
 

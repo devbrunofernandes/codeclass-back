@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import AsyncClient
 
-from app.services.auth_service import auth_service
+from app.infrastructure.auth import auth_service
 
 
 @pytest.fixture

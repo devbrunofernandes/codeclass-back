@@ -6,9 +6,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
+from app.infrastructure.auth import auth_service
 from app.models.organization import Organization
 from app.models.user import User
-from app.services.auth_service import auth_service
 from tests.conftest import TenantContext
 
 

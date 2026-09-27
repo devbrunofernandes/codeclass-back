@@ -2,10 +2,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.infrastructure.ai.base import AiProvider
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, ReleasePolicyType
 from app.schemas.submission import AiInsightResult, AiItemInsightSchema
-from app.services.ai.base import AiProvider
 from app.services.ai_service import AiService
 
 

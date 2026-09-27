@@ -10,9 +10,9 @@ from app.core.exceptions import (
     BadRequestException,
     ForbiddenException,
 )
+from app.infrastructure.realtime import ConnectionManager
 from app.models.classroom import Classroom
 from app.services.chat_service import chat_service
-from app.services.websocket_manager import ConnectionManager
 from tests.fixtures.tenants import TenantContext
 
 # --- Testes Unitários de WebSocket ConnectionManager ---

@@ -5,9 +5,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AuthError
+from app.infrastructure.auth import auth_service
 from app.models.enums import OrgRole
 from app.models.user import User
-from app.services.auth_service import AuthError, auth_service
 
 
 @pytest.mark.asyncio
