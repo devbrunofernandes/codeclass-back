@@ -19,12 +19,11 @@ from app.models.user import User
 security = HTTPBearer(auto_error=True)
 
 
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> User:
-    """Extrai e valida o token JWT, retornando o usuário correspondente no banco local."""
-    token = credentials.credentials
+async def get_user_from_token(token: str, db: AsyncSession) -> User:
+    """Valida o token JWT bruto e retorna o usuário correspondente no banco local."""
+    if not token:
+        raise UnauthorizedException("Token de autenticação não fornecido.")
+
     payload = await auth_service.verify_jwt_token(token)
 
     sub = payload.get("sub")
@@ -47,15 +46,14 @@ async def get_current_user(
     return user
 
 
-async def get_current_active_member(
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+async def get_active_member_by_user_id(
+    user_id: UUID, db: AsyncSession
 ) -> OrganizationMember:
-    """Obtém o registro de membro institucional ativo associado ao usuário autenticado."""
+    """Obtém o registro de membro institucional ativo a partir do ID do usuário."""
     stmt = (
         select(OrganizationMember)
         .options(selectinload(OrganizationMember.organization))
-        .where(OrganizationMember.user_id == current_user.id)
+        .where(OrganizationMember.user_id == user_id)
     )
     result = await db.execute(stmt)
     member = result.scalar_one_or_none()
@@ -67,3 +65,19 @@ async def get_current_active_member(
         raise ForbiddenException("Acesso de usuário desativado na organização.")
 
     return member
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Extrai e valida o token JWT dos headers HTTP, retornando o usuário correspondente."""
+    return await get_user_from_token(credentials.credentials, db)
+
+
+async def get_current_active_member(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> OrganizationMember:
+    """Obtém o registro de membro institucional ativo associado ao usuário autenticado."""
+    return await get_active_member_by_user_id(current_user.id, db)

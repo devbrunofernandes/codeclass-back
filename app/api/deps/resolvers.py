@@ -6,7 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps.authentication import get_current_active_member
+from app.api.deps.authentication import (
+    get_active_member_by_user_id,
+    get_current_active_member,
+    get_user_from_token,
+)
 from app.api.deps.contexts import (
     AssignmentContext,
     ClassroomContext,
@@ -16,6 +20,7 @@ from app.api.deps.database import get_db
 from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
+    UnauthorizedException,
 )
 from app.models.assignment import Assignment
 from app.models.classroom import Classroom, ClassroomStudent
@@ -138,3 +143,36 @@ async def get_submission_context(
         assignment_context=assignment_context,
         is_submission_author=is_submission_author,
     )
+
+
+async def authenticate_classroom_connection(
+    classroom_id: UUID,
+    token: str | None,
+    db: AsyncSession,
+) -> ClassroomContext:
+    """Autentica uma conexão (ex.: WebSocket) para uma sala de aula e valida permissões de acesso."""
+    if not token:
+        raise UnauthorizedException("Token de autenticação não fornecido.")
+
+    user = await get_user_from_token(token, db)
+    member = await get_active_member_by_user_id(user.id, db)
+
+    stmt = (
+        select(Classroom)
+        .options(selectinload(Classroom.teacher))
+        .where(Classroom.id == classroom_id)
+    )
+    result = await db.execute(stmt)
+    classroom = result.scalar_one_or_none()
+
+    if classroom is None:
+        raise NotFoundException("Sala de aula não encontrada.")
+
+    context = await _build_classroom_context(classroom, member, db)
+
+    if not context.can_view:
+        raise ForbiddenException(
+            "Usuário não possui permissão para acessar esta sala de aula."
+        )
+
+    return context
