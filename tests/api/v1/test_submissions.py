@@ -1700,3 +1700,430 @@ async def test_classroom_list_submissions_when_unauthenticated_should_return_401
         f"/api/v1/classrooms/{assignment_with_submissions.classroom_id}/submissions",
     )
     assert response.status_code == 401
+
+
+# --- 13. Testes de Rascunho / Auto-Save (PUT /assignments/{assignment_id}/submissions/draft) ---
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_code_when_enrolled_student_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    payload = {
+        "content": {
+            "language": "python3",
+            "code": "def partial_solution():\n    # Em desenvolvimento\n",
+        }
+    }
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["assignment_id"] == str(assignment_without_submissions.id)
+    assert data["student_id"] == str(tenant.student.user.id)
+    assert data["status"] == "draft"
+    assert data["grade"] is None
+    assert "partial_solution" in data["content"]["code"]
+    assert "ai_insight" not in data
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_empty_code_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    payload = {
+        "content": {
+            "language": "python3",
+            "code": "",
+        }
+    }
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "draft"
+    assert response.json()["content"]["code"] == ""
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_questionnaire_partial_answers_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    mixed_questionnaire_assignment: Assignment,
+):
+    payload = {
+        "content": {
+            "answers": [
+                {"question_id": 1, "selected_option_id": "b"},
+            ]
+        }
+    }
+    response = await async_client.put(
+        f"/api/v1/assignments/{mixed_questionnaire_assignment.id}/submissions/draft",
+        json=payload,
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "draft"
+    assert len(data["content"]["answers"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_updates_existing_draft_idempotently_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    # 1. Primeiro rascunho
+    res1 = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "v1"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert res1.status_code == 200
+    sub_id = res1.json()["id"]
+
+    # 2. Atualização do rascunho
+    res2 = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "v2"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert res2.status_code == 200
+    assert res2.json()["id"] == sub_id
+    assert res2.json()["content"]["code"] == "v2"
+    assert res2.json()["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_already_submitted_pending_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+):
+    # Envio formal inicial
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions",
+        json={"content": {"language": "python3", "code": "def solve(): return 1"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert submit_res.status_code == 201
+
+    # Tentativa de auto-save sem unsubmit
+    draft_res = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "def solve(): return 2"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert draft_res.status_code == 400
+    assert "desfaça a entrega primeiro" in draft_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_already_published_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    objective_questionnaire_assignment: Assignment,
+):
+    # Submete questionário com política imediata (vai direto para published)
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{objective_questionnaire_assignment.id}/submissions",
+        json={"content": {"answers": [{"question_id": 1, "selected_option_id": "b"}]}},
+        headers=tenant.student.auth_headers,
+    )
+    assert submit_res.status_code == 201
+    assert submit_res.json()["status"] == "published"
+
+    # Tentativa de salvar rascunho
+    draft_res = await async_client.put(
+        f"/api/v1/assignments/{objective_questionnaire_assignment.id}/submissions/draft",
+        json={"content": {"answers": []}},
+        headers=tenant.student.auth_headers,
+    )
+    assert draft_res.status_code == 400
+    assert "já foi corrigida e avaliada" in draft_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_deadline_expired_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    enrolled_student: ClassroomStudent,
+    assignment_without_submissions: Assignment,
+    db_session: AsyncSession,
+):
+    assignment_without_submissions.deadline = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.commit()
+
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 400
+    assert "prazo" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_unauthenticated_should_return_401(
+    async_client: AsyncClient,
+    assignment_without_submissions: Assignment,
+):
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_not_enrolled_student_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+        headers=tenant.other_student.auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_other_org_member_should_return_403(
+    async_client: AsyncClient,
+    create_tenant: Callable[..., Awaitable[TenantContext]],
+    assignment_without_submissions: Assignment,
+):
+    other_tenant = await create_tenant("Outra Instituição Rascunho")
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+        headers=other_tenant.student.auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_assignment_not_found_should_return_404(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    response = await async_client.put(
+        f"/api/v1/assignments/{uuid.uuid4()}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_malformed_body_should_return_422(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    response = await async_client.put(
+        f"/api/v1/assignments/{assignment_without_submissions.id}/submissions/draft",
+        json={},
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 422
+
+
+# --- 14. Testes de Reprocessamento de IA (POST /submissions/{submission_id}/retry-ai) ---
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_teacher_of_classroom_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+):
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(submission_awaiting_review.id)
+    assert data["status"] == "pending"
+    assert data["ai_insight"]["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_admin_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+):
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.admin.auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_owner_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+):
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_submission_already_published_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+    db_session: AsyncSession,
+):
+    submission_awaiting_review.status = SubmissionStatus.PUBLISHED
+    await db_session.commit()
+
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 400
+    assert (
+        "não é possível reprocessar ia para submissões já avaliadas"
+        in response.json()["detail"].lower()
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_submission_in_draft_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+    db_session: AsyncSession,
+):
+    submission_awaiting_review.status = SubmissionStatus.DRAFT
+    await db_session.commit()
+
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 400
+    assert "estado de rascunho" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_objective_questionnaire_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    objective_questionnaire_on_review: Assignment,
+    db_session: AsyncSession,
+):
+    # Cria submissão para questionário 100% objetivo
+    sub = Submission(
+        assignment_id=objective_questionnaire_on_review.id,
+        student_id=tenant.student.user.id,
+        content={"answers": [{"question_id": 1, "selected_option_id": "a"}]},
+        status=SubmissionStatus.AWAITING_REVIEW,
+    )
+    db_session.add(sub)
+    await db_session.commit()
+
+    response = await async_client.post(
+        f"/api/v1/submissions/{sub.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 400
+    assert "não requer análise de ia" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_unauthenticated_should_return_401(
+    async_client: AsyncClient,
+    submission_awaiting_review: Submission,
+):
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_student_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+):
+    # Aluno tenta disparar retry de IA -> 403 Forbidden
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_other_org_teacher_should_return_403(
+    async_client: AsyncClient,
+    create_tenant: Callable[..., Awaitable[TenantContext]],
+    submission_awaiting_review: Submission,
+):
+    other_tenant = await create_tenant("Outra Instituição Retry IA")
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=other_tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_not_found_should_return_404(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    response = await async_client.post(
+        f"/api/v1/submissions/{uuid.uuid4()}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_already_pending_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    submission_awaiting_review: Submission,
+    db_session: AsyncSession,
+):
+    submission_awaiting_review.status = SubmissionStatus.PENDING
+    await db_session.commit()
+
+    response = await async_client.post(
+        f"/api/v1/submissions/{submission_awaiting_review.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 400
+    assert "já se encontra em processamento de ia" in response.json()["detail"].lower()

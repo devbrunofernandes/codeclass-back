@@ -27,6 +27,7 @@ from app.schemas.submission import (
     SubmissionCreateRequest,
     SubmissionDetailStudentResponse,
     SubmissionDetailTeacherResponse,
+    SubmissionDraftRequest,
     SubmissionStatsResponse,
     SubmissionStudentResponse,
     SubmissionSummaryStudentResponse,
@@ -81,6 +82,31 @@ async def unsubmit_assignment(
 
     sub = await submission_service.unsubmit_assignment(
         context.assignment, context.current_member.user_id, db
+    )
+    return SubmissionStudentResponse.model_validate(sub)
+
+
+@router.put(
+    "/assignments/{assignment_id}/submissions/draft",
+    response_model=SubmissionStudentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Salva ou atualiza rascunho de submissão do aluno sem submissão formal nem disparo de IA",
+)
+async def save_draft_submission(
+    request: SubmissionDraftRequest,
+    context: Annotated[AssignmentContext, Depends(get_assignment_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SubmissionStudentResponse:
+    if not context.is_enrolled_student:
+        raise ForbiddenException(
+            "Acesso negado: apenas alunos matriculados na sala de aula podem salvar rascunhos."
+        )
+
+    sub = await submission_service.save_draft_submission(
+        assignment=context.assignment,
+        student_id=context.current_member.user_id,
+        request=request,
+        db=db,
     )
     return SubmissionStudentResponse.model_validate(sub)
 
@@ -268,6 +294,30 @@ async def get_submission(
         context.submission,
         can_view_ai_insights=context.can_view_ai_insights,
     )
+
+
+@router.post(
+    "/submissions/{submission_id}/retry-ai",
+    response_model=SubmissionDetailTeacherResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reinicia a análise assíncrona de IA para uma submissão",
+)
+async def retry_ai_evaluation(
+    context: Annotated[SubmissionContext, Depends(get_submission_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    background_tasks: BackgroundTasks,
+) -> SubmissionDetailTeacherResponse:
+    if not context.can_view_ai_insights:
+        raise ForbiddenException(
+            "Acesso negado: apenas o docente responsável ou a coordenação podem solicitar nova avaliação da IA."
+        )
+
+    sub = await submission_service.retry_ai_evaluation(
+        submission=context.submission,
+        db=db,
+        background_tasks=background_tasks,
+    )
+    return SubmissionDetailTeacherResponse.model_validate(sub)
 
 
 @router.put(

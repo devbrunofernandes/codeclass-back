@@ -8,10 +8,15 @@ from pydantic import ValidationError
 from app.models.enums import SubmissionStatus
 from app.schemas.submission import (
     ChoiceAnswerContent,
+    ChoiceAnswerDraftContent,
     CodeSubmissionContent,
+    CodeSubmissionDraftContent,
     OpenAnswerContent,
+    OpenAnswerDraftContent,
     QuestionnaireSubmissionContent,
+    QuestionnaireSubmissionDraftContent,
     SubmissionCreateRequest,
+    SubmissionDraftRequest,
     SubmissionStudentResponse,
 )
 
@@ -115,3 +120,57 @@ def test_submission_student_response_should_not_have_ai_insights_field():
     # Garantia estrita: campo ai_insights não existe no schema do estudante
     assert "ai_insights" not in resp.model_dump()
     assert "ai_insight" not in resp.model_dump()
+
+
+def test_code_submission_draft_content_when_empty_should_be_valid():
+    draft = CodeSubmissionDraftContent()
+    assert draft.language == "python3"
+    assert draft.code == ""
+
+
+def test_choice_answer_draft_content_with_none_should_be_valid():
+    ans = ChoiceAnswerDraftContent(question_id=1, selected_option_id=None)
+    assert ans.question_id == 1
+    assert ans.selected_option_id is None
+
+
+def test_open_answer_draft_content_with_none_should_be_valid():
+    ans = OpenAnswerDraftContent(question_id=2, text_answer=None)
+    assert ans.question_id == 2
+    assert ans.text_answer is None
+
+
+def test_questionnaire_submission_draft_content_when_empty_should_be_valid():
+    draft = QuestionnaireSubmissionDraftContent()
+    assert draft.answers == []
+
+
+def test_questionnaire_submission_draft_content_with_partial_answers():
+    draft = QuestionnaireSubmissionDraftContent(
+        answers=[
+            ChoiceAnswerDraftContent(question_id=1, selected_option_id="b"),
+            OpenAnswerDraftContent(question_id=2, text_answer=None),
+        ]
+    )
+    assert len(draft.answers) == 2
+
+
+def test_questionnaire_submission_draft_content_duplicate_ids_should_fail():
+    with pytest.raises(ValidationError) as exc_info:
+        QuestionnaireSubmissionDraftContent(
+            answers=[
+                ChoiceAnswerDraftContent(question_id=1, selected_option_id="a"),
+                ChoiceAnswerDraftContent(question_id=1, selected_option_id="b"),
+            ]
+        )
+    assert "mais de uma vez" in str(exc_info.value)
+
+
+def test_submission_draft_request_polymorphic_instantiation():
+    req_code = SubmissionDraftRequest(content=CodeSubmissionDraftContent(code="x = 1"))
+    assert isinstance(req_code.content, CodeSubmissionDraftContent)
+
+    req_quest = SubmissionDraftRequest(
+        content=QuestionnaireSubmissionDraftContent(answers=[])
+    )
+    assert isinstance(req_quest.content, QuestionnaireSubmissionDraftContent)

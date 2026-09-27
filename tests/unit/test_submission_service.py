@@ -1,9 +1,11 @@
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -13,10 +15,15 @@ from app.core.exceptions import (
 )
 from app.models.assignment import Assignment
 from app.models.classroom import ClassroomStudent
-from app.models.enums import SubmissionStatus
-from app.models.submission import Submission
+from app.models.enums import AssignmentType, SubmissionStatus
+from app.models.submission import Submission, SubmissionAiInsight
 from app.models.user import User
 from app.schemas.evaluation import SubmissionEvaluationRequest
+from app.schemas.submission import (
+    CodeSubmissionDraftContent,
+    QuestionnaireSubmissionDraftContent,
+    SubmissionDraftRequest,
+)
 from app.services.submission_service import SubmissionService, submission_service
 from tests.fixtures.tenants import TenantContext
 
@@ -207,7 +214,7 @@ async def test_process_submission_ai_task_when_failure_should_fallback_to_failed
 @pytest.mark.asyncio
 async def test_submit_assignment_idempotency_when_draft_code_identical_should_not_enqueue_ai():
     from app.models.assignment import Assignment
-    from app.models.enums import AssignmentType, ReleasePolicyType
+    from app.models.enums import ReleasePolicyType
     from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
 
     service = SubmissionService()
@@ -252,7 +259,7 @@ async def test_submit_assignment_idempotency_when_draft_code_identical_should_no
 @pytest.mark.asyncio
 async def test_submit_assignment_when_draft_code_modified_should_enqueue_ai():
     from app.models.assignment import Assignment
-    from app.models.enums import AssignmentType, ReleasePolicyType
+    from app.models.enums import ReleasePolicyType
     from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
 
     service = SubmissionService()
@@ -825,3 +832,304 @@ async def test_get_submission_detail_includes_assignment_info(
         detail.assignment.classroom_id
         == submission_awaiting_review.assignment.classroom_id
     )
+
+
+# --- Testes de Auto-save / Rascunhos (save_draft_submission) ---
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_new_should_create_draft(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    request = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3", code="def partial_code():\n    pass\n"
+        )
+    )
+
+    sub = await submission_service.save_draft_submission(
+        assignment=assignment_without_submissions,
+        student_id=tenant.student.user.id,
+        request=request,
+        db=db_session,
+    )
+
+    assert sub.id is not None
+    assert sub.status == SubmissionStatus.DRAFT
+    assert sub.content["code"] == "def partial_code():\n    pass\n"
+    assert sub.grade is None
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_draft_already_exists_should_update(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    # Primeiro rascunho
+    req1 = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(language="python3", code="pass")
+    )
+    sub1 = await submission_service.save_draft_submission(
+        assignment=assignment_without_submissions,
+        student_id=tenant.student.user.id,
+        request=req1,
+        db=db_session,
+    )
+
+    # Atualização do rascunho
+    req2 = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3", code="def updated(): return 42"
+        )
+    )
+    sub2 = await submission_service.save_draft_submission(
+        assignment=assignment_without_submissions,
+        student_id=tenant.student.user.id,
+        request=req2,
+        db=db_session,
+    )
+
+    assert sub2.id == sub1.id
+    assert sub2.status == SubmissionStatus.DRAFT
+    assert sub2.content["code"] == "def updated(): return 42"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_already_submitted_pending_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    # Cria submissão formal em PENDING
+    sub = Submission(
+        assignment_id=assignment_without_submissions.id,
+        student_id=tenant.student.user.id,
+        content={"language": "python3", "code": "def f(): pass"},
+        status=SubmissionStatus.PENDING,
+    )
+    db_session.add(sub)
+    await db_session.commit()
+
+    req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(language="python3", code="novo")
+    )
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=req,
+            db=db_session,
+        )
+    assert "desfaça a entrega primeiro" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_already_published_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    sub = Submission(
+        assignment_id=assignment_without_submissions.id,
+        student_id=tenant.student.user.id,
+        content={"language": "python3", "code": "def f(): pass"},
+        status=SubmissionStatus.PUBLISHED,
+        grade=Decimal("10.00"),
+    )
+    db_session.add(sub)
+    await db_session.commit()
+
+    req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(language="python3", code="novo")
+    )
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=req,
+            db=db_session,
+        )
+    assert "já foi corrigida e avaliada" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_deadline_expired_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    # Define prazo no passado
+    assignment_without_submissions.deadline = datetime.now(UTC) - timedelta(hours=1)
+    await db_session.commit()
+
+    req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(language="python3", code="pass")
+    )
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=req,
+            db=db_session,
+        )
+    assert "prazo para esta atividade já expirou" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_type_mismatch_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    # Atividade é do tipo CODE, mas enviou respostas de questionário
+    req = SubmissionDraftRequest(
+        content=QuestionnaireSubmissionDraftContent(answers=[])
+    )
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=req,
+            db=db_session,
+        )
+    assert "esperado rascunho de código" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_when_disallowed_language_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(language="ruby", code="puts 1")
+    )
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=req,
+            db=db_session,
+        )
+    assert "não é permitida para esta atividade" in str(exc_info.value)
+
+
+# --- Testes de Reprocessamento de IA (retry_ai_evaluation) ---
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_when_published_should_raise_bad_request(
+    db_session: AsyncSession,
+    submission_awaiting_review: Submission,
+):
+    submission_awaiting_review.status = SubmissionStatus.PUBLISHED
+    await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.retry_ai_evaluation(
+            submission=submission_awaiting_review,
+            db=db_session,
+            background_tasks=bg_tasks,
+        )
+    assert "Não é possível reprocessar IA para submissões já avaliadas" in str(
+        exc_info.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_when_draft_should_raise_bad_request(
+    db_session: AsyncSession,
+    submission_awaiting_review: Submission,
+):
+    submission_awaiting_review.status = SubmissionStatus.DRAFT
+    await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.retry_ai_evaluation(
+            submission=submission_awaiting_review,
+            db=db_session,
+            background_tasks=bg_tasks,
+        )
+    assert "estado de rascunho" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_when_objective_questionnaire_should_raise_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    objective_questionnaire_on_review: Assignment,
+):
+    # Submissão de questionário 100% objetivo
+    sub = Submission(
+        assignment_id=objective_questionnaire_on_review.id,
+        student_id=tenant.student.user.id,
+        content={"answers": [{"question_id": 1, "selected_option_id": "a"}]},
+        status=SubmissionStatus.AWAITING_REVIEW,
+    )
+    sub.assignment = objective_questionnaire_on_review
+    db_session.add(sub)
+    await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.retry_ai_evaluation(
+            submission=sub,
+            db=db_session,
+            background_tasks=bg_tasks,
+        )
+    assert "não requer análise de IA" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_success_schedules_task(
+    db_session: AsyncSession,
+    submission_awaiting_review: Submission,
+):
+    # Simula insight anterior com falha
+    if not submission_awaiting_review.ai_insight:
+        submission_awaiting_review.ai_insight = SubmissionAiInsight(
+            submission_id=submission_awaiting_review.id,
+            status="failed",
+            error_message="Timeout",
+        )
+        db_session.add(submission_awaiting_review.ai_insight)
+    else:
+        submission_awaiting_review.ai_insight.status = "failed"
+        submission_awaiting_review.ai_insight.error_message = "Timeout"
+    await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    sub = await submission_service.retry_ai_evaluation(
+        submission=submission_awaiting_review,
+        db=db_session,
+        background_tasks=bg_tasks,
+    )
+
+    assert sub.status == SubmissionStatus.PENDING
+    assert sub.ai_insight.status == "in_progress"
+    assert sub.ai_insight.error_message is None
+    # Verifica que a tarefa foi adicionada às BackgroundTasks
+    assert len(bg_tasks.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_when_already_pending_should_raise_bad_request(
+    db_session: AsyncSession,
+    submission_awaiting_review: Submission,
+):
+    submission_awaiting_review.status = SubmissionStatus.PENDING
+    await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    with pytest.raises(BadRequestException) as exc_info:
+        await submission_service.retry_ai_evaluation(
+            submission=submission_awaiting_review,
+            db=db_session,
+            background_tasks=bg_tasks,
+        )
+    assert "já se encontra em processamento de IA" in str(exc_info.value)

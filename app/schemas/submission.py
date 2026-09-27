@@ -52,6 +52,49 @@ class SubmissionCreateRequest(BaseModel):
     content: CodeSubmissionContent | QuestionnaireSubmissionContent
 
 
+class CodeSubmissionDraftContent(BaseModel):
+    language: str = Field(default="python3", max_length=50)
+    code: str = Field(default="")
+
+
+class ChoiceAnswerDraftContent(BaseModel):
+    question_id: int = Field(ge=1)
+    selected_option_id: str | None = None
+
+
+class OpenAnswerDraftContent(BaseModel):
+    question_id: int = Field(ge=1)
+    text_answer: str | None = None
+
+
+AnswerItemDraftContent = Annotated[
+    ChoiceAnswerDraftContent | OpenAnswerDraftContent,
+    Field(union_mode="left_to_right"),
+]
+
+
+class QuestionnaireSubmissionDraftContent(BaseModel):
+    answers: list[AnswerItemDraftContent] = Field(default_factory=list)
+
+    @field_validator("answers")
+    @classmethod
+    def validate_unique_question_ids(
+        cls, answers: list[ChoiceAnswerDraftContent | OpenAnswerDraftContent]
+    ) -> list[ChoiceAnswerDraftContent | OpenAnswerDraftContent]:
+        seen_ids = set()
+        for ans in answers:
+            if ans.question_id in seen_ids:
+                raise ValueError(
+                    f"A questão com ID {ans.question_id} foi respondida mais de uma vez."
+                )
+            seen_ids.add(ans.question_id)
+        return answers
+
+
+class SubmissionDraftRequest(BaseModel):
+    content: CodeSubmissionDraftContent | QuestionnaireSubmissionDraftContent
+
+
 class SubmissionStudentResponse(BaseModel):
     id: UUID
     assignment_id: UUID

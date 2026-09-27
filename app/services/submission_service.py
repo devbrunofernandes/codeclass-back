@@ -32,12 +32,15 @@ from app.schemas.evaluation import (
 )
 from app.schemas.submission import (
     CodeSubmissionContent,
+    CodeSubmissionDraftContent,
     QuestionnaireSubmissionContent,
+    QuestionnaireSubmissionDraftContent,
     SubmissionAiInsightResponse,
     SubmissionAssignmentInfo,
     SubmissionCreateRequest,
     SubmissionDetailStudentResponse,
     SubmissionDetailTeacherResponse,
+    SubmissionDraftRequest,
     SubmissionStatsResponse,
     SubmissionStudentInfo,
 )
@@ -397,6 +400,118 @@ class SubmissionService:
         await db.refresh(sub)
         return sub
 
+    async def save_draft_submission(
+        self,
+        assignment: Assignment,
+        student_id: uuid.UUID,
+        request: SubmissionDraftRequest,
+        db: AsyncSession,
+    ) -> Submission:
+        """Salva ou atualiza um rascunho de submissão do aluno sem submissão formal nem disparo de IA."""
+        # 1. Valida se o prazo já expirou
+        if assignment.deadline and datetime.now(UTC) > assignment.deadline:
+            raise BadRequestException("O prazo para esta atividade já expirou.")
+
+        # 2. Valida tipo de conteúdo compatível com a atividade
+        content_data = request.content.model_dump()
+        if assignment.type == AssignmentType.CODE:
+            if not isinstance(request.content, CodeSubmissionDraftContent):
+                raise BadRequestException(
+                    "Conteúdo inválido: esperado rascunho de código para esta atividade."
+                )
+            allowed_langs = [
+                lang["name"] for lang in assignment.config.get("languages", [])
+            ]
+            if (
+                allowed_langs
+                and request.content.language
+                and request.content.language not in allowed_langs
+            ):
+                raise BadRequestException(
+                    f"A linguagem '{request.content.language}' não é permitida para esta atividade."
+                )
+        elif assignment.type == AssignmentType.QUESTIONNAIRE:
+            if not isinstance(request.content, QuestionnaireSubmissionDraftContent):
+                raise BadRequestException(
+                    "Conteúdo inválido: esperado rascunho de respostas de questionário para esta atividade."
+                )
+
+        # 3. Consulta submissão existente
+        stmt = (
+            select(Submission)
+            .options(selectinload(Submission.evaluation))
+            .where(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == student_id,
+            )
+        )
+        result = await db.execute(stmt)
+        sub = result.scalar_one_or_none()
+
+        # 4. Validação estrita da máquina de estados
+        if sub:
+            if sub.status == SubmissionStatus.PUBLISHED or sub.evaluation is not None:
+                raise BadRequestException(
+                    "Esta submissão já foi corrigida e avaliada, não sendo possível alterá-la."
+                )
+            if sub.status in (
+                SubmissionStatus.PENDING,
+                SubmissionStatus.AWAITING_REVIEW,
+            ):
+                raise BadRequestException(
+                    "A atividade já foi submetida formalmente. Para editar o rascunho, desfaça a entrega primeiro (unsubmit)."
+                )
+
+            # Atualiza rascunho existente
+            sub.content = content_data
+            sub.status = SubmissionStatus.DRAFT
+            sub.submitted_at = func.now()  # type: ignore[assignment]
+        else:
+            # Cria novo rascunho
+            sub = Submission(
+                assignment_id=assignment.id,
+                student_id=student_id,
+                content=content_data,
+                status=SubmissionStatus.DRAFT,
+            )
+            db.add(sub)
+
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            # Tratamento defensivo de corrida concorrente de criação inicial de rascunho
+            stmt = (
+                select(Submission)
+                .options(selectinload(Submission.evaluation))
+                .where(
+                    Submission.assignment_id == assignment.id,
+                    Submission.student_id == student_id,
+                )
+            )
+            result = await db.execute(stmt)
+            sub = result.scalar_one_or_none()
+            if not sub:
+                raise
+            if sub.status == SubmissionStatus.PUBLISHED or sub.evaluation is not None:
+                raise BadRequestException(
+                    "Esta submissão já foi corrigida e avaliada, não sendo possível alterá-la."
+                )
+            if sub.status in (
+                SubmissionStatus.PENDING,
+                SubmissionStatus.AWAITING_REVIEW,
+            ):
+                raise BadRequestException(
+                    "A atividade já foi submetida formalmente. Para editar o rascunho, desfaça a entrega primeiro (unsubmit)."
+                )
+            sub.content = content_data
+            sub.status = SubmissionStatus.DRAFT
+            sub.submitted_at = func.now()  # type: ignore[assignment]
+            await db.commit()
+
+        await db.refresh(sub)
+        return sub
+
     async def list_submissions(
         self,
         assignment_id: uuid.UUID | None = None,
@@ -553,6 +668,89 @@ class SubmissionService:
         await db.refresh(evaluation)
         await db.refresh(submission)
         return evaluation
+
+    async def retry_ai_evaluation(
+        self,
+        submission: Submission,
+        db: AsyncSession,
+        background_tasks: BackgroundTasks,
+    ) -> Submission:
+        """Reinicia a análise assíncrona de IA para uma submissão."""
+        stmt = (
+            select(Submission)
+            .options(
+                selectinload(Submission.assignment),
+                selectinload(Submission.ai_insight),
+                selectinload(Submission.evaluation),
+            )
+            .where(Submission.id == submission.id)
+        )
+        res = await db.execute(stmt)
+        sub = res.scalar_one_or_none()
+        if not sub:
+            raise NotFoundException("Submissão não encontrada.")
+
+        if sub.status == SubmissionStatus.PUBLISHED or sub.evaluation is not None:
+            raise BadRequestException(
+                "Não é possível reprocessar IA para submissões já avaliadas ou com correção publicada."
+            )
+
+        if sub.status == SubmissionStatus.DRAFT:
+            raise BadRequestException(
+                "Não é possível processar IA para uma submissão em estado de rascunho."
+            )
+
+        if sub.status == SubmissionStatus.PENDING:
+            raise BadRequestException(
+                "A submissão já se encontra em processamento de IA."
+            )
+
+        # Valida se a atividade requer IA
+        assignment = sub.assignment
+        questions = assignment.config.get("questions", [])
+        is_all_objective = assignment.type == AssignmentType.QUESTIONNAIRE and all(
+            q.get("type") == "choice" for q in questions
+        )
+        if is_all_objective:
+            raise BadRequestException(
+                "Esta atividade possui correção 100% determinística e não requer análise de IA."
+            )
+
+        # Atualiza status e prepara o insight
+        if sub.ai_insight:
+            sub.ai_insight.status = "in_progress"
+            sub.ai_insight.error_message = None
+            sub.ai_insight.suggested_grade = None
+            sub.ai_insight.max_grade = None
+            sub.ai_insight.reasoning = None
+            sub.ai_insight.strengths = []
+            sub.ai_insight.improvements = []
+            sub.ai_insight.item_insights = None
+        else:
+            sub.ai_insight = SubmissionAiInsight(
+                submission_id=sub.id,
+                status="in_progress",
+            )
+            db.add(sub.ai_insight)
+
+        sub.status = SubmissionStatus.PENDING
+        await db.commit()
+
+        # Recarrega a submissão com as relações necessárias para evitar lazy loading
+        reload_stmt = (
+            select(Submission)
+            .options(
+                selectinload(Submission.assignment).selectinload(Assignment.classroom),
+                selectinload(Submission.student),
+                selectinload(Submission.ai_insight),
+                selectinload(Submission.evaluation),
+            )
+            .where(Submission.id == sub.id)
+        )
+        sub = (await db.execute(reload_stmt)).scalar_one()
+
+        background_tasks.add_task(self.process_submission_ai_task, sub.id)
+        return sub
 
     async def get_submission_evaluation(
         self,

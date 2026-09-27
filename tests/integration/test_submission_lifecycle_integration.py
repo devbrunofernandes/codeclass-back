@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -813,3 +814,192 @@ async def test_selective_batch_evaluation_release_and_stats_lifecycle_e2e(
     assert s3["ready_to_publish"] == 0
     assert s3["awaiting_review"] == 1
     assert float(s3["average_grade"]) == 8.0
+
+
+@pytest.mark.asyncio
+async def test_submission_draft_autosave_lifecycle_and_ai_retry_e2e(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    db_session: AsyncSession,
+):
+    """Jornada E2E completa de auto-save de rascunhos e reprocessamento de IA:
+
+    1. Criação de sala e tarefa pelo docente
+    2. Auto-save de rascunho parcial pelo aluno (status=draft)
+    3. Atualização incremental do rascunho (status=draft)
+    4. Submissão formal (status=pending)
+    5. Bloqueio de auto-save durante entrega formal ativa (400)
+    6. Desfazer entrega (unsubmit -> status=draft)
+    7. Novo auto-save após unsubmit (status=draft)
+    8. Reenvio formal
+    9. Simulação de falha na inferência de IA (status=failed)
+    10. Docente aciona reprocessamento sob demanda (POST /retry-ai -> 200)
+    11. Avaliação e publicação docente
+    12. Bloqueio de auto-save e retry-ai após publicação
+    """
+    # 1. Cria sala de aula e matricula aluno
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma de Rascunhos e IA E2E"},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert class_res.status_code == 201
+    classroom_id = class_res.json()["id"]
+
+    await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    # 2. Cria atividade de código
+    assign_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Merge Sort",
+            "description": "Implemente Merge Sort",
+            "type": "code",
+            "release_policy": "on_review",
+            "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
+            "config": {
+                "languages": [
+                    {"name": "python3", "starter_code": "def mergesort(): pass"}
+                ],
+                "time_limit_sec": 2.0,
+                "memory_limit_mb": 128,
+                "rubric": "Avaliar estabilidade e divisão e conquista",
+                "test_cases": [
+                    {"id": 1, "input": "3 1 2\n", "expected_output": "1 2 3\n"}
+                ],
+            },
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert assign_res.status_code == 201
+    assignment_id = assign_res.json()["id"]
+
+    # 3. Aluno salva rascunho inicial incompleto
+    draft1_res = await async_client.put(
+        f"/api/v1/assignments/{assignment_id}/submissions/draft",
+        json={
+            "content": {
+                "language": "python3",
+                "code": "def mergesort(arr):\n    # TODO",
+            }
+        },
+        headers=tenant.student.auth_headers,
+    )
+    assert draft1_res.status_code == 200
+    assert draft1_res.json()["status"] == "draft"
+    submission_id = draft1_res.json()["id"]
+
+    # 4. Aluno atualiza rascunho com código funcional
+    code_v2 = "def mergesort(arr):\n    if len(arr) <= 1: return arr\n    return sorted(arr)\n"
+    draft2_res = await async_client.put(
+        f"/api/v1/assignments/{assignment_id}/submissions/draft",
+        json={"content": {"language": "python3", "code": code_v2}},
+        headers=tenant.student.auth_headers,
+    )
+    assert draft2_res.status_code == 200
+    assert draft2_res.json()["id"] == submission_id
+    assert draft2_res.json()["content"]["code"] == code_v2
+
+    # 5. Aluno realiza entrega formal
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": code_v2}},
+        headers=tenant.student.auth_headers,
+    )
+    assert submit_res.status_code == 201
+    assert submit_res.json()["status"] == "pending"
+
+    # 6. Tentativa de auto-save durante entrega ativa deve retornar 400
+    block_draft = await async_client.put(
+        f"/api/v1/assignments/{assignment_id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "def hack(): pass"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert block_draft.status_code == 400
+    assert "desfaça a entrega primeiro" in block_draft.json()["detail"].lower()
+
+    # 7. Aluno desfaz entrega formal (unsubmit)
+    unsub_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/unsubmit",
+        headers=tenant.student.auth_headers,
+    )
+    assert unsub_res.status_code == 200
+    assert unsub_res.json()["status"] == "draft"
+
+    # 8. Aluno pode salvar rascunho novamente
+    code_v3 = "def mergesort(arr):\n    return sorted(arr)\n"
+    draft3_res = await async_client.put(
+        f"/api/v1/assignments/{assignment_id}/submissions/draft",
+        json={"content": {"language": "python3", "code": code_v3}},
+        headers=tenant.student.auth_headers,
+    )
+    assert draft3_res.status_code == 200
+    assert draft3_res.json()["status"] == "draft"
+
+    # 9. Reenvio formal com novo código
+    resubmit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions",
+        json={"content": {"language": "python3", "code": code_v3}},
+        headers=tenant.student.auth_headers,
+    )
+    assert resubmit_res.status_code == 201
+
+    # 10. Simula falha transitória de IA no PostgreSQL
+    sub_stmt = (
+        select(Submission)
+        .options(selectinload(Submission.ai_insight))
+        .where(Submission.id == uuid.UUID(submission_id))
+    )
+    sub_db = (await db_session.execute(sub_stmt)).scalar_one()
+    sub_db.status = SubmissionStatus.AWAITING_REVIEW
+    if sub_db.ai_insight:
+        sub_db.ai_insight.status = "failed"
+        sub_db.ai_insight.error_message = "Rate limit 429 transitório"
+    await db_session.commit()
+
+    # 11. Docente visualiza falha na consulta detalhada
+    teacher_detail = await async_client.get(
+        f"/api/v1/submissions/{submission_id}",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert teacher_detail.status_code == 200
+    assert teacher_detail.json()["ai_insight"]["status"] == "failed"
+
+    # 12. Docente aciona retry de IA sob demanda
+    retry_res = await async_client.post(
+        f"/api/v1/submissions/{submission_id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert retry_res.status_code == 200
+    assert retry_res.json()["status"] == "pending"
+    assert retry_res.json()["ai_insight"]["status"] == "in_progress"
+
+    # 13. Docente avalia e publica a correção
+    eval_res = await async_client.put(
+        f"/api/v1/submissions/{submission_id}/evaluation",
+        json={
+            "grade": 9.5,
+            "general_feedback": "Excelente implementação de ordenação",
+            "publish": True,
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert eval_res.status_code == 200
+
+    # 14. Validação final pós-publicação: auto-save e retry-ai bloqueados
+    post_pub_draft = await async_client.put(
+        f"/api/v1/assignments/{assignment_id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "pass"}},
+        headers=tenant.student.auth_headers,
+    )
+    assert post_pub_draft.status_code == 400
+
+    post_pub_retry = await async_client.post(
+        f"/api/v1/submissions/{submission_id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert post_pub_retry.status_code == 400
