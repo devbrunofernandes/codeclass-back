@@ -4,8 +4,8 @@ from typing import Any
 from urllib.parse import quote
 
 import pytest
+from fastapi.testclient import TestClient
 from httpx import AsyncClient
-from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.database import engine

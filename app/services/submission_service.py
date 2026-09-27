@@ -476,6 +476,7 @@ class SubmissionService:
             )
             db.add(sub)
 
+        assignment_id = assignment.id
         try:
             await db.commit()
         except IntegrityError:
@@ -485,7 +486,7 @@ class SubmissionService:
                 select(Submission)
                 .options(selectinload(Submission.evaluation))
                 .where(
-                    Submission.assignment_id == assignment.id,
+                    Submission.assignment_id == assignment_id,
                     Submission.student_id == student_id,
                 )
             )

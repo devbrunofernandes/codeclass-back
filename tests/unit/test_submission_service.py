@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -1133,3 +1134,178 @@ async def test_retry_ai_evaluation_when_already_pending_should_raise_bad_request
             background_tasks=bg_tasks,
         )
     assert "já se encontra em processamento de IA" in str(exc_info.value)
+
+
+def test_validate_code_content_empty_or_whitespace_raises_bad_request():
+    service = SubmissionService()
+    with pytest.raises(
+        BadRequestException, match="Linguagem e código são obrigatórios."
+    ):
+        service.validate_code_content("", "print('hi')", ["python"])
+
+    with pytest.raises(
+        BadRequestException, match="Linguagem e código são obrigatórios."
+    ):
+        service.validate_code_content("python", "   \n\t  ", ["python"])
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_evaluation_when_insight_is_none_creates_new_insight(
+    db_session: AsyncSession,
+    submission_awaiting_review: Submission,
+):
+    if submission_awaiting_review.ai_insight:
+        await db_session.delete(submission_awaiting_review.ai_insight)
+        submission_awaiting_review.ai_insight = None
+        await db_session.commit()
+
+    bg_tasks = BackgroundTasks()
+    sub = await submission_service.retry_ai_evaluation(
+        submission=submission_awaiting_review,
+        db=db_session,
+        background_tasks=bg_tasks,
+    )
+
+    assert sub.status == SubmissionStatus.PENDING
+    assert sub.ai_insight is not None
+    assert sub.ai_insight.status == "in_progress"
+    assert len(bg_tasks.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_concurrent_race_integrity_error_recovery(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    draft_req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3",
+            code="x = 10",
+        )
+    )
+
+    existing_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=assignment_without_submissions.id,
+        student_id=tenant.student.user.id,
+        content={"language": "python3", "code": "x = 5"},
+        status=SubmissionStatus.DRAFT,
+    )
+    db_session.add(existing_sub)
+    await db_session.commit()
+
+    with patch.object(
+        db_session,
+        "commit",
+        side_effect=[IntegrityError("conflict", orig=MagicMock(), params={}), None],
+    ):
+        sub = await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=draft_req,
+            db=db_session,
+        )
+        assert sub.status == SubmissionStatus.DRAFT
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_concurrent_race_when_published_raises_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    existing_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=assignment_without_submissions.id,
+        student_id=tenant.student.user.id,
+        content={"language": "python3", "code": "x = 5"},
+        status=SubmissionStatus.PUBLISHED,
+    )
+    db_session.add(existing_sub)
+    await db_session.commit()
+
+    draft_req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3",
+            code="x = 10",
+        )
+    )
+
+    with (
+        patch.object(
+            db_session,
+            "commit",
+            side_effect=IntegrityError("conflict", orig=MagicMock(), params={}),
+        ),
+        pytest.raises(BadRequestException, match="já foi corrigida e avaliada"),
+    ):
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=draft_req,
+            db=db_session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_concurrent_race_when_pending_raises_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_without_submissions: Assignment,
+):
+    existing_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=assignment_without_submissions.id,
+        student_id=tenant.student.user.id,
+        content={"language": "python3", "code": "x = 5"},
+        status=SubmissionStatus.PENDING,
+    )
+    db_session.add(existing_sub)
+    await db_session.commit()
+
+    draft_req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3",
+            code="x = 10",
+        )
+    )
+
+    with (
+        patch.object(
+            db_session,
+            "commit",
+            side_effect=IntegrityError("conflict", orig=MagicMock(), params={}),
+        ),
+        pytest.raises(BadRequestException, match="já foi submetida formalmente"),
+    ):
+        await submission_service.save_draft_submission(
+            assignment=assignment_without_submissions,
+            student_id=tenant.student.user.id,
+            request=draft_req,
+            db=db_session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_save_draft_submission_questionnaire_with_code_content_raises_bad_request(
+    db_session: AsyncSession,
+    tenant: TenantContext,
+    assignment_with_submissions: Assignment,
+):
+    # assignment_with_submissions é do tipo QUESTIONNAIRE
+    draft_req = SubmissionDraftRequest(
+        content=CodeSubmissionDraftContent(
+            language="python3",
+            code="x = 10",
+        )
+    )
+    with pytest.raises(
+        BadRequestException, match="esperado rascunho de respostas de questionário"
+    ):
+        await submission_service.save_draft_submission(
+            assignment=assignment_with_submissions,
+            student_id=tenant.student.user.id,
+            request=draft_req,
+            db=db_session,
+        )

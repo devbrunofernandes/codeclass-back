@@ -16,6 +16,7 @@ pytest_plugins = [
     "tests.fixtures.chat",
     "tests.fixtures.integration",
     "tests.fixtures.runner",
+    "tests.fixtures.auth",
 ]
 
 __all__ = ["TenantContext", "TenantMember"]

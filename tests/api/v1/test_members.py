@@ -316,3 +316,66 @@ async def test_member_role_and_status_edge_cases_and_rbac_violations(
         json={"is_active": False},
     )
     assert res_nf_status.status_code == 404
+
+    # 7. Tentativa de cadastrar membro diretamente com papel OWNER -> 400
+    res_create_owner = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/members",
+        headers=tenant.owner.auth_headers,
+        json={
+            "email": "owner_direto@example.com",
+            "full_name": "Owner Direto",
+            "password": "password123",
+            "role": OrgRole.OWNER.value,
+        },
+    )
+    assert res_create_owner.status_code == 400
+    assert "proprietário" in res_create_owner.json()["detail"].lower()
+
+    # 8. Admin tenta promover um Aluno para ADMIN -> 403
+    res_promote_admin = await async_client.put(
+        f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/role",
+        headers=tenant.admin.auth_headers,
+        json={"role": OrgRole.ADMIN.value},
+    )
+    assert res_promote_admin.status_code == 403
+    assert "proprietário" in res_promote_admin.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_deactivate_another_admin_should_return_403(
+    async_client: AsyncClient, tenant: TenantContext, monkeypatch
+) -> None:
+    # Cria um segundo admin via Owner
+    second_admin_id = uuid.uuid4()
+    second_admin_email = f"second_admin_{second_admin_id.hex[:6]}@example.com"
+    monkeypatch.setattr(
+        auth_service,
+        "create_auth_user",
+        AsyncMock(
+            return_value={
+                "id": second_admin_id,
+                "email": second_admin_email,
+                "full_name": "Second Admin",
+            }
+        ),
+    )
+    create_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/members",
+        headers=tenant.owner.auth_headers,
+        json={
+            "email": second_admin_email,
+            "full_name": "Second Admin",
+            "password": "password123",
+            "role": OrgRole.ADMIN.value,
+        },
+    )
+    assert create_res.status_code == 201
+
+    # Primeiro Admin tenta desativar o segundo Admin -> 403
+    res_deact = await async_client.patch(
+        f"/api/v1/orgs/{tenant.org.id}/members/{second_admin_id}/status",
+        headers=tenant.admin.auth_headers,
+        json={"is_active": False},
+    )
+    assert res_deact.status_code == 403
+    assert "proprietário" in res_deact.json()["detail"].lower()
