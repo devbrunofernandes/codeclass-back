@@ -17,6 +17,7 @@ from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
+from app.domain.grading.questionnaire_grader import QuestionnaireGrader
 from app.models.assignment import Assignment
 from app.models.classroom import Classroom, ClassroomStudent
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
@@ -65,34 +66,8 @@ class SubmissionService:
         questions: list[dict[str, Any]],
         answers: list[dict[str, Any]],
     ) -> tuple[Decimal, dict[str, Any]]:
-        answers_by_id = {ans.get("question_id"): ans for ans in answers}
-        total_points = Decimal("0.00")
-        questions_eval = []
-
-        for q in questions:
-            qid = q.get("id")
-            max_points = Decimal(str(q.get("points", 0.0)))
-            correct_option_id = q.get("correct_option_id")
-            ans = answers_by_id.get(qid)
-            selected_option_id = ans.get("selected_option_id") if ans else None
-
-            is_correct = bool(
-                selected_option_id and selected_option_id == correct_option_id
-            )
-            awarded = max_points if is_correct else Decimal("0.00")
-            total_points += awarded
-
-            questions_eval.append(
-                {
-                    "question_id": qid,
-                    "type": "choice",
-                    "awarded_points": float(awarded),
-                    "max_points": float(max_points),
-                    "is_correct": is_correct,
-                }
-            )
-
-        return total_points, {"questions_evaluation": questions_eval}
+        result = QuestionnaireGrader.grade_objective(questions, answers)
+        return result.total_points, result.detailed_scores
 
     async def submit_assignment(
         self,

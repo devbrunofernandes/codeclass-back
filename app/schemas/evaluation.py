@@ -1,18 +1,19 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.grading.questionnaire_grader import QuestionEvaluationItem
 
-class QuestionEvaluationItem(BaseModel):
-    question_id: int = Field(ge=1)
-    type: Literal["choice", "open"] | str
-    awarded_points: float = Field(ge=0.0)
-    max_points: float = Field(ge=0.0)
-    is_correct: bool | None = None
-    teacher_feedback: str | None = None
+__all__ = [
+    "BatchEvaluationReleaseRequest",
+    "BatchEvaluationReleaseResponse",
+    "QuestionEvaluationItem",
+    "SubmissionEvaluationRequest",
+    "SubmissionEvaluationResponse",
+]
 
 
 class SubmissionEvaluationRequest(BaseModel):

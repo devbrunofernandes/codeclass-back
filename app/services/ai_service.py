@@ -1,8 +1,8 @@
 import json
 import logging
-from decimal import Decimal
 from typing import Any
 
+from app.domain.grading.questionnaire_grader import QuestionnaireGrader
 from app.infrastructure.ai import AiProvider, get_ai_provider
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType
@@ -102,24 +102,16 @@ Código Submetido:
         questions: list[dict[str, Any]] = assignment.config.get("questions", [])
         answers_by_id = {ans.get("question_id"): ans for ans in answers}
 
-        # 1. Separa questões objetivas de dissertativas
-        objective_questions = [q for q in questions if q.get("type") == "choice"]
+        # 1. Separa questões dissertativas
         open_questions = [q for q in questions if q.get("type") == "open"]
 
-        objective_score = Decimal("0.00")
         total_max_points = sum(float(q.get("points", 0.0)) for q in questions)
         if total_max_points == 0.0:
             total_max_points = float(assignment.config.get("max_grade", 10.0))
 
-        # 2. Correção determinística das questões objetivas
-        for q in objective_questions:
-            qid = q.get("id")
-            pts = Decimal(str(q.get("points", 0.0)))
-            correct_opt = q.get("correct_option_id")
-            user_ans = answers_by_id.get(qid)
-            selected_opt = user_ans.get("selected_option_id") if user_ans else None
-            if selected_opt and selected_opt == correct_opt:
-                objective_score += pts
+        # 2. Correção determinística das questões objetivas via QuestionnaireGrader (DRY)
+        grading_result = QuestionnaireGrader.grade_objective(questions, answers)
+        objective_score = grading_result.total_points
 
         # 3. Monta payload para inferência da IA sobre as questões dissertativas
         open_questions_data = []
