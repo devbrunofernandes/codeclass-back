@@ -6,7 +6,91 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.auth import auth_service
+from app.models.enums import OrgRole
 from tests.conftest import TenantContext
+
+
+@pytest.mark.asyncio
+async def test_get_users_me_when_authenticated_should_return_full_profile(
+    async_client: AsyncClient, tenant: TenantContext
+):
+    # Act
+    res = await async_client.get(
+        "/api/v1/users/me",
+        headers=tenant.owner.auth_headers,
+    )
+
+    # Assert
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == str(tenant.owner.user.id)
+    assert data["email"] == tenant.owner.user.email
+    assert data["full_name"] == tenant.owner.user.full_name
+    assert data["role"] == OrgRole.OWNER.value
+    assert data["is_active"] is True
+    assert data["organization_id"] == str(tenant.org.id)
+    assert data["organization_name"] == tenant.org.name
+    assert data["organization_slug"] == tenant.org.slug
+    assert "created_at" in data
+
+
+@pytest.mark.asyncio
+async def test_get_users_me_when_unauthenticated_should_return_401(
+    async_client: AsyncClient,
+):
+    # Act
+    res = await async_client.get("/api/v1/users/me")
+
+    # Assert
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_users_me_when_user_deactivated_should_return_403(
+    async_client: AsyncClient, tenant: TenantContext
+):
+    # Arrange: Desativa o aluno
+    await async_client.patch(
+        f"/api/v1/orgs/{tenant.org.id}/members/{tenant.student.user.id}/status",
+        headers=tenant.owner.auth_headers,
+        json={"is_active": False},
+    )
+
+    # Act
+    res = await async_client.get(
+        "/api/v1/users/me",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert res.status_code == 403
+    assert "desativado" in res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_get_users_me_multi_tenant_isolation(
+    async_client: AsyncClient, tenant: TenantContext, create_tenant
+):
+    # Arrange: Cria outro tenant
+    other_tenant = await create_tenant("Outra Faculdade")
+
+    # Act: Owner 1
+    res1 = await async_client.get(
+        "/api/v1/users/me",
+        headers=tenant.owner.auth_headers,
+    )
+    # Act: Owner 2
+    res2 = await async_client.get(
+        "/api/v1/users/me",
+        headers=other_tenant.owner.auth_headers,
+    )
+
+    # Assert
+    assert res1.status_code == 200
+    assert res2.status_code == 200
+    assert res1.json()["organization_id"] == str(tenant.org.id)
+    assert res2.json()["organization_id"] == str(other_tenant.org.id)
+    assert res1.json()["id"] != res2.json()["id"]
 
 
 @pytest.mark.asyncio

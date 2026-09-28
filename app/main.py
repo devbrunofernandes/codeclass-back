@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,9 +18,12 @@ app = FastAPI(
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    content: dict[str, Any] = {"detail": exc.message}
+    if exc.extra:
+        content["extra"] = exc.extra
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.message},
+        content=content,
         headers=exc.headers,
     )
 

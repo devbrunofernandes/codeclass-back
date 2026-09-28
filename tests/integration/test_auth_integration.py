@@ -33,7 +33,7 @@ async def test_get_current_user_profile_me(
 ) -> None:
     """Valida que o token ES256 do Supabase é decodificado e mapeado para o perfil completo."""
     res = await async_client.get(
-        "/api/v1/auth/me",
+        "/api/v1/users/me",
         headers=registered_org.auth_headers,
     )
     assert res.status_code == 200
@@ -63,7 +63,7 @@ async def test_refresh_token_flow(
 
     # Testa que o novo access token funciona imediatamente
     me_res = await async_client.get(
-        "/api/v1/auth/me",
+        "/api/v1/users/me",
         headers={"Authorization": f"Bearer {data['access_token']}"},
     )
     assert me_res.status_code == 200

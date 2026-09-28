@@ -60,7 +60,9 @@ async def test_login_invalid_credentials(async_client: AsyncClient, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_me_success(async_client: AsyncClient, sample_user_and_org):
+async def test_get_auth_me_is_removed_and_returns_404(
+    async_client: AsyncClient, sample_user_and_org
+):
     user_data = sample_user_and_org
     token = user_data["token"]
 
@@ -68,21 +70,7 @@ async def test_get_me_success(async_client: AsyncClient, sample_user_and_org):
         "/api/v1/auth/me",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["id"] == str(user_data["owner_id"])
-    assert data["email"] == user_data["email"]
-    assert data["full_name"] == "Auth Owner"
-    assert data["organization_id"] == user_data["org_id"]
-    assert data["organization_slug"] == user_data["slug"]
-    assert data["role"] == OrgRole.OWNER.value
-    assert data["is_active"] is True
-
-
-@pytest.mark.asyncio
-async def test_get_me_unauthorized(async_client: AsyncClient):
-    res = await async_client.get("/api/v1/auth/me")
-    assert res.status_code == 401
+    assert res.status_code == 404
 
 
 @pytest.mark.asyncio

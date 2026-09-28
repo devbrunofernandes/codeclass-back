@@ -4,13 +4,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_active_member, get_current_user, get_db
+from app.api.deps import get_db
 from app.core.exceptions import ForbiddenException
 from app.infrastructure.auth import auth_service
 from app.models.organization import OrganizationMember
 from app.models.user import User
 from app.schemas.user import (
-    CurrentUserProfileResponse,
     RefreshTokenRequest,
     RefreshTokenResponse,
     TokenResponse,
@@ -76,26 +75,4 @@ async def refresh_token(request: RefreshTokenRequest) -> RefreshTokenResponse:
         access_token=session_data["access_token"],
         refresh_token=session_data.get("refresh_token"),
         token_type="bearer",
-    )
-
-
-@router.get(
-    "/me",
-    response_model=CurrentUserProfileResponse,
-    summary="Consulta o perfil completo e vínculo do usuário autenticado",
-)
-async def get_me(
-    current_user: Annotated[User, Depends(get_current_user)],
-    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
-) -> CurrentUserProfileResponse:
-    return CurrentUserProfileResponse(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        created_at=current_user.created_at,
-        role=current_member.role,
-        is_active=current_member.is_active,
-        organization_id=current_member.organization_id,
-        organization_name=current_member.organization.name,
-        organization_slug=current_member.organization.slug,
     )

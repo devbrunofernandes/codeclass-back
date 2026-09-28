@@ -18,6 +18,28 @@ from app.services.user_service import user_service
 router = APIRouter()
 
 
+@router.get(
+    "/me",
+    response_model=CurrentUserProfileResponse,
+    summary="Consulta o perfil completo e vínculo do usuário autenticado",
+)
+async def get_my_profile(
+    current_user: Annotated[User, Depends(get_current_user)],
+    current_member: Annotated[OrganizationMember, Depends(get_current_active_member)],
+) -> CurrentUserProfileResponse:
+    return CurrentUserProfileResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        created_at=current_user.created_at,
+        role=current_member.role,
+        is_active=current_member.is_active,
+        organization_id=current_member.organization_id,
+        organization_name=current_member.organization.name,
+        organization_slug=current_member.organization.slug,
+    )
+
+
 @router.patch(
     "/me",
     response_model=CurrentUserProfileResponse,
