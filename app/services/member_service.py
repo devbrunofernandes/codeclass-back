@@ -6,9 +6,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.compensating_transaction import CompensatingTransaction
 from app.core.exceptions import (
     AppException,
-    AuthError,
     BadRequestException,
     ConflictException,
     ForbiddenException,
@@ -63,48 +63,34 @@ class MemberService:
         user_id = auth_user["id"]
 
         try:
-            # 2. Persiste usuário no banco local
-            new_user = User(
-                id=user_id,
-                email=request.email,
-                full_name=request.full_name,
-            )
-            db.add(new_user)
-            await db.flush()
+            async with CompensatingTransaction(db=db) as tx:
+                tx.register(auth_service.delete_auth_user, user_id)
 
-            # 3. Cria vínculo na organização
-            new_member = OrganizationMember(
-                organization_id=org_id,
-                user_id=new_user.id,
-                role=request.role,
-            )
-            db.add(new_member)
-            await db.commit()
-            await db.refresh(new_member)
-        except IntegrityError as e:
-            await db.rollback()
-            # Rollback compensatório no Supabase Auth
-            try:
-                await auth_service.delete_auth_user(user_id)
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao reverter usuário %s no auth provider: %s",
-                    user_id,
-                    cleanup_err,
+                # 2. Persiste usuário no banco local
+                new_user = User(
+                    id=user_id,
+                    email=request.email,
+                    full_name=request.full_name,
                 )
+                db.add(new_user)
+                await db.flush()
+
+                # 3. Cria vínculo na organização
+                new_member = OrganizationMember(
+                    organization_id=org_id,
+                    user_id=new_user.id,
+                    role=request.role,
+                )
+                db.add(new_member)
+                await db.commit()
+                await db.refresh(new_member)
+        except IntegrityError as e:
             raise ConflictException(
                 "Conflito ao registrar membro na organização."
             ) from e
+        except AppException:
+            raise
         except Exception as e:
-            await db.rollback()
-            try:
-                await auth_service.delete_auth_user(user_id)
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao reverter usuário %s no auth provider: %s",
-                    user_id,
-                    cleanup_err,
-                )
             raise AppException(
                 message=f"Erro interno ao criar membro: {e!s}",
                 status_code=500,

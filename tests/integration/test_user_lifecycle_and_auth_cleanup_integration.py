@@ -6,10 +6,13 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AuthError
+from app.core.exceptions import AuthError, ConflictException
 from app.infrastructure.auth import auth_service
 from app.models.organization import Organization
 from app.models.user import User
+from app.schemas.organization import OrganizationRegisterRequest
+from app.schemas.user import UserCreate
+from app.services.organization_service import organization_service
 from tests.integration.conftest import OrgContext
 
 
@@ -172,3 +175,65 @@ async def test_postgres_trigger_deletes_from_auth_users_on_public_user_delete(
         # Limpeza defensiva caso o teste falhe antes do delete
         with contextlib.suppress(AuthError):
             await auth_service.delete_auth_user(user_uuid)
+
+
+@pytest.mark.asyncio
+async def test_register_organization_compensatory_transaction_removes_auth_user_on_db_conflict(
+    registered_org: OrgContext,
+    db_session: AsyncSession,
+) -> None:
+    """Valida que quando ocorre colisão no PostgreSQL durante a transação,
+    a CompensatingTransaction executa o rollback no PostgreSQL e remove o usuário de auth.users."""
+    suffix = uuid.uuid4().hex[:6]
+    conflict_email = f"conflict_owner_{suffix}@codeclass-int.com"
+    conflict_password = "senhaSegura123!"
+
+    req = OrganizationRegisterRequest(
+        name=f"Duplicate Org {suffix}",
+        slug=registered_org.org_slug,
+        owner=UserCreate(
+            email=conflict_email,
+            full_name=f"Conflict Owner {suffix}",
+            password=conflict_password,
+        ),
+    )
+
+    original_execute = db_session.execute
+
+    async def patched_execute(stmt, *args, **kwargs):  # type: ignore[no-untyped-def]
+        stmt_str = str(stmt)
+        if "organizations.slug" in stmt_str and "organizations.id" not in stmt_str:
+
+            class DummyResult:
+                def scalar_one_or_none(self) -> None:
+                    return None
+
+            return DummyResult()
+        return await original_execute(stmt, *args, **kwargs)
+
+    db_session.execute = patched_execute  # type: ignore[assignment]
+
+    with pytest.raises(ConflictException):
+        await organization_service.register_organization(req, db_session)
+
+    db_session.execute = original_execute  # type: ignore[assignment]
+
+    # Valida que o usuário criado no GoTrue foi removido pelo rollback compensatório
+    auth_user_record = (
+        await db_session.execute(
+            text("SELECT id FROM auth.users WHERE email = :email"),
+            {"email": conflict_email},
+        )
+    ).scalar_one_or_none()
+
+    assert auth_user_record is None, (
+        "Usuário deve ter sido excluído de auth.users pela transação compensatória"
+    )
+
+    public_user = (
+        await db_session.execute(
+            text("SELECT id FROM public.users WHERE email = :email"),
+            {"email": conflict_email},
+        )
+    ).scalar_one_or_none()
+    assert public_user is None

@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import AppException, AuthError, NotFoundException
+from app.core.compensating_transaction import CompensatingTransaction
+from app.core.exceptions import AppException, NotFoundException
 from app.infrastructure.auth import auth_service
 from app.models.organization import OrganizationMember
 from app.models.user import User
@@ -30,28 +31,24 @@ class UserService:
 
         user.full_name = full_name
         try:
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-            return user
-        except Exception as e:
-            await db.rollback()
-            # Rollback compensatório no Supabase Auth para restaurar o nome anterior
-            try:
-                await auth_service.update_auth_user(
+            async with CompensatingTransaction(db=db) as tx:
+                tx.register(
+                    auth_service.update_auth_user,
                     user_id=user_id,
                     full_name=old_full_name,
                 )
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao reverter metadados no auth provider no rollback de usuário %s: %s",
-                    user_id,
-                    cleanup_err,
-                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+        except AppException:
+            raise
+        except Exception as e:
             raise AppException(
                 message=f"Erro ao atualizar usuário no banco de dados: {e!s}",
                 status_code=500,
             ) from e
+
+        return user
 
     async def change_password(
         self,

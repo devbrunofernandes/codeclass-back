@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.compensating_transaction import CompensatingTransaction
 from app.core.exceptions import (
     AppException,
     AuthError,
@@ -57,61 +58,51 @@ class OrganizationService:
         user_id = auth_user["id"]
 
         try:
-            # 2. Persiste usuário local
-            owner_user = User(
-                id=user_id,
-                email=request.owner.email,
-                full_name=request.owner.full_name,
-            )
-            db.add(owner_user)
-            await db.flush()
+            async with CompensatingTransaction(db=db) as tx:
+                tx.register(auth_service.delete_auth_user, user_id)
 
-            # 3. Cria organização
-            organization = Organization(
-                name=request.name,
-                slug=request.slug,
-                owner_id=owner_user.id,
-            )
-            db.add(organization)
-            await db.flush()
-
-            # 4. Cria vínculo como Owner
-            member = OrganizationMember(
-                organization_id=organization.id,
-                user_id=owner_user.id,
-                role=OrgRole.OWNER,
-                is_active=True,
-            )
-            db.add(member)
-
-            await db.commit()
-            await db.refresh(organization)
-            return OrganizationResponse.model_validate(organization)
-        except IntegrityError as e:
-            await db.rollback()
-            try:
-                await auth_service.delete_auth_user(user_id)
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao remover usuário do provedor no rollback: %s",
-                    cleanup_err,
+                # 2. Persiste usuário local
+                owner_user = User(
+                    id=user_id,
+                    email=request.owner.email,
+                    full_name=request.owner.full_name,
                 )
+                db.add(owner_user)
+                await db.flush()
+
+                # 3. Cria organização
+                organization = Organization(
+                    name=request.name,
+                    slug=request.slug,
+                    owner_id=owner_user.id,
+                )
+                db.add(organization)
+                await db.flush()
+
+                # 4. Cria vínculo como Owner
+                member = OrganizationMember(
+                    organization_id=organization.id,
+                    user_id=owner_user.id,
+                    role=OrgRole.OWNER,
+                    is_active=True,
+                )
+                db.add(member)
+
+                await db.commit()
+                await db.refresh(organization)
+        except IntegrityError as e:
             raise ConflictException(
                 "Organização com este slug ou usuário com este e-mail já existe."
             ) from e
+        except AppException:
+            raise
         except Exception as e:
-            await db.rollback()
-            try:
-                await auth_service.delete_auth_user(user_id)
-            except AuthError as cleanup_err:
-                logger.warning(
-                    "Falha ao remover usuário do provedor no rollback: %s",
-                    cleanup_err,
-                )
             raise AppException(
                 message=f"Erro ao cadastrar organização: {e!s}",
                 status_code=500,
             ) from e
+
+        return OrganizationResponse.model_validate(organization)
 
     async def get_organization(
         self,
