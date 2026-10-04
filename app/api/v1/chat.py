@@ -166,4 +166,4 @@ async def websocket_chat_endpoint(
     except Exception as exc:  # noqa: BLE001
         logger.debug("Erro na conexão WebSocket para a sala %s: %s", classroom_id, exc)
     finally:
-        connection_manager.disconnect(classroom_id, websocket)
+        await connection_manager.disconnect(classroom_id, websocket)

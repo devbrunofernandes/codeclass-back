@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = ""
     STORAGE_PROVIDER: str = "supabase"
 
+    # Realtime PubSub Broker (Agnóstico: "in_memory" ou "postgres")
+    PUBSUB_BROKER: str = "in_memory"
+
     # External Integrations - Code Runner Engine (Agnóstico)
     RUNNER_PROVIDER: str = "judge0"
     RUNNER_API_URL: str = "https://judge0-ce.p.rapidapi.com"

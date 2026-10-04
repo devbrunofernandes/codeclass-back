@@ -28,7 +28,7 @@ async def test_connection_manager_connect_and_disconnect() -> None:
     assert room_id in manager._rooms
     assert mock_ws in manager._rooms[room_id]
 
-    manager.disconnect(room_id, mock_ws)
+    await manager.disconnect(room_id, mock_ws)
     assert room_id not in manager._rooms
 
 
