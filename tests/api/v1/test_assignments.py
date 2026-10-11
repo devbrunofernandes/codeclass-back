@@ -548,3 +548,275 @@ async def test_delete_assignment_when_called_by_student_or_admin_should_return_4
         headers=tenant.admin.auth_headers,
     )
     assert res_admin.status_code == 403
+
+
+# --- Testes de Jornada do Aluno (GET /assignments/my-assignments & /summary) ---
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_called_by_student_should_return_200_ok(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    student_assignments_bundle,
+):
+    # Act
+    response = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 5
+
+    by_id = {item["id"]: item for item in data}
+    pending_item = by_id[str(student_assignments_bundle.pending_assignment.id)]
+    assert pending_item["student_status"] == "pending"
+    assert pending_item["has_draft"] is False
+    assert pending_item["submission"] is None
+    assert pending_item["classroom_name"] == student_assignments_bundle.classroom.name
+
+    overdue_item = by_id[str(student_assignments_bundle.overdue_assignment.id)]
+    assert overdue_item["student_status"] == "overdue"
+    assert overdue_item["has_draft"] is False
+    assert overdue_item["submission"] is None
+
+    draft_item = by_id[str(student_assignments_bundle.draft_assignment.id)]
+    assert draft_item["student_status"] == "pending"
+    assert draft_item["has_draft"] is True
+    assert draft_item["submission"] is None
+
+    submitted_item = by_id[str(student_assignments_bundle.submitted_assignment.id)]
+    assert submitted_item["student_status"] == "submitted"
+    assert submitted_item["has_draft"] is False
+    assert submitted_item["submission"]["status"] == "pending"
+
+    graded_item = by_id[str(student_assignments_bundle.graded_assignment.id)]
+    assert graded_item["student_status"] == "graded"
+    assert graded_item["has_draft"] is False
+    assert graded_item["submission"]["status"] == "published"
+    assert float(graded_item["submission"]["grade"]) == 9.50
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_filtered_by_classroom_should_return_200_ok(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    student_assignments_bundle,
+):
+    # Act
+    response = await async_client.get(
+        f"/api/v1/assignments/my-assignments?classroom_id={student_assignments_bundle.classroom.id}",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 200
+    assert len(response.json()) == 5
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_filtered_by_status_should_return_200_ok(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    student_assignments_bundle,
+):
+    # 1. Pending (espera 2: sem submissão e com rascunho)
+    res_pending = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=pending",
+        headers=tenant.student.auth_headers,
+    )
+    assert res_pending.status_code == 200
+    assert len(res_pending.json()) == 2
+    assert all(item["student_status"] == "pending" for item in res_pending.json())
+
+    # 2. Overdue (espera 1)
+    res_overdue = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=overdue",
+        headers=tenant.student.auth_headers,
+    )
+    assert res_overdue.status_code == 200
+    assert len(res_overdue.json()) == 1
+    assert res_overdue.json()[0]["student_status"] == "overdue"
+
+    # 3. Submitted (espera 1)
+    res_submitted = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=submitted",
+        headers=tenant.student.auth_headers,
+    )
+    assert res_submitted.status_code == 200
+    assert len(res_submitted.json()) == 1
+    assert res_submitted.json()[0]["student_status"] == "submitted"
+
+    # 4. Graded (espera 1)
+    res_graded = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=graded",
+        headers=tenant.student.auth_headers,
+    )
+    assert res_graded.status_code == 200
+    assert len(res_graded.json()) == 1
+    assert res_graded.json()[0]["student_status"] == "graded"
+
+    # 5. Unsubmitted (espera 3: pending + overdue)
+    res_unsub = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=unsubmitted",
+        headers=tenant.student.auth_headers,
+    )
+    assert res_unsub.status_code == 200
+    assert len(res_unsub.json()) == 3
+    assert all(
+        item["student_status"] in ("pending", "overdue") for item in res_unsub.json()
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_my_assignments_summary_when_called_by_student_should_return_200_ok(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    student_assignments_bundle,
+):
+    # Act
+    response = await async_client.get(
+        "/api/v1/assignments/my-assignments/summary",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 5
+    assert data["pending"] == 2
+    assert data["overdue"] == 1
+    assert data["submitted"] == 1
+    assert data["graded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_my_assignments_summary_when_filtered_by_classroom_should_return_200_ok(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    student_assignments_bundle,
+):
+    # Act
+    response = await async_client.get(
+        f"/api/v1/assignments/my-assignments/summary?classroom_id={student_assignments_bundle.classroom.id}",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 5
+    assert data["pending"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_unauthenticated_should_return_401(
+    async_client: AsyncClient,
+):
+    # Act
+    response = await async_client.get("/api/v1/assignments/my-assignments")
+
+    # Assert
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_called_by_teacher_or_admin_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    # Act & Assert - Professor
+    res_teacher = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert res_teacher.status_code == 403
+
+    # Act & Assert - Admin
+    res_admin = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers=tenant.admin.auth_headers,
+    )
+    assert res_admin.status_code == 403
+
+    # Act & Assert - Owner
+    res_owner = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers=tenant.owner.auth_headers,
+    )
+    assert res_owner.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_other_org_classroom_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    create_tenant,
+    create_classroom,
+):
+    # Arrange
+    other_tenant = await create_tenant("Outra Faculdade API")
+    other_classroom = await create_classroom(other_tenant)
+
+    # Act
+    response = await async_client.get(
+        f"/api/v1/assignments/my-assignments?classroom_id={other_classroom.id}",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 403
+    assert "outra organização" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_not_enrolled_in_classroom_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    create_classroom,
+):
+    # Arrange: sala criada na mesma organização mas o aluno não foi matriculado
+    not_enrolled_room = await create_classroom(tenant, name="Turma Isolada")
+
+    # Act
+    response = await async_client.get(
+        f"/api/v1/assignments/my-assignments?classroom_id={not_enrolled_room.id}",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 403
+    assert "não é membro" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_classroom_not_found_should_return_404(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    # Act
+    response = await async_client.get(
+        f"/api/v1/assignments/my-assignments?classroom_id={uuid.uuid4()}",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 404
+    assert "não encontrada" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_my_assignments_when_invalid_status_filter_should_return_422(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+):
+    # Act
+    response = await async_client.get(
+        "/api/v1/assignments/my-assignments?status=invalid_status",
+        headers=tenant.student.auth_headers,
+    )
+
+    # Assert
+    assert response.status_code == 422

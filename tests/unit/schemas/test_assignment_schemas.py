@@ -223,3 +223,78 @@ def test_assignment_create_request_when_questionnaire_all_choice_with_immediate_
         ),
     )
     assert req.release_policy == ReleasePolicyType.IMMEDIATE
+
+
+def test_student_assignment_status_enum_values():
+    from app.schemas.assignment import (
+        StudentAssignmentFilterStatus,
+        StudentAssignmentStatus,
+    )
+
+    assert [s.value for s in StudentAssignmentStatus] == [
+        "pending",
+        "overdue",
+        "submitted",
+        "graded",
+    ]
+    assert [s.value for s in StudentAssignmentFilterStatus] == [
+        "pending",
+        "overdue",
+        "submitted",
+        "graded",
+        "unsubmitted",
+    ]
+
+
+def test_student_assignment_item_response_and_summary_schemas():
+    import uuid
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from app.models.enums import SubmissionStatus
+    from app.schemas.assignment import (
+        StudentAssignmentItemResponse,
+        StudentAssignmentsSummaryResponse,
+        StudentAssignmentStatus,
+        StudentAssignmentSubmissionBrief,
+    )
+
+    now = datetime.now(UTC)
+    sub_id = uuid.uuid4()
+    brief = StudentAssignmentSubmissionBrief(
+        id=sub_id,
+        status=SubmissionStatus.PUBLISHED,
+        grade=Decimal("9.50"),
+        submitted_at=now,
+    )
+
+    item = StudentAssignmentItemResponse(
+        id=uuid.uuid4(),
+        classroom_id=uuid.uuid4(),
+        classroom_name="Estruturas de Dados",
+        title="Lista 1",
+        description="Fila e Pilha",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now,
+        created_at=now,
+        student_status=StudentAssignmentStatus.GRADED,
+        has_draft=False,
+        submission=brief,
+    )
+    assert item.student_status == StudentAssignmentStatus.GRADED
+    assert item.submission is not None
+    assert item.submission.grade == Decimal("9.50")
+
+    summary = StudentAssignmentsSummaryResponse(
+        total=4,
+        pending=1,
+        overdue=1,
+        submitted=1,
+        graded=1,
+    )
+    assert summary.total == 4
+    assert summary.pending == 1
+    assert summary.overdue == 1
+    assert summary.submitted == 1
+    assert summary.graded == 1

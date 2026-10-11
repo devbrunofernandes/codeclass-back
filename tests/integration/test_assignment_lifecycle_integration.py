@@ -119,3 +119,150 @@ async def test_full_assignment_lifecycle_and_security(
         headers={"Authorization": f"Bearer {tenant.teacher.token}"},
     )
     assert check_deleted.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_student_my_assignments_lifecycle_integration(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    db_session: AsyncSession,
+):
+    # 1. Arrange: Professor cria turma e matricula aluno
+    class_res = await async_client.post(
+        f"/api/v1/orgs/{tenant.org.id}/classrooms",
+        json={"name": "Turma de Algoritmos Discente"},
+        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+    )
+    assert class_res.status_code == 201
+    classroom_id = class_res.json()["id"]
+
+    enroll_res = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/students",
+        json={"student_id": str(tenant.student.user.id)},
+        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+    )
+    assert enroll_res.status_code == 201
+
+    # 2. Professor cria 1ª atividade (prazo futuro)
+    code_payload = {
+        "title": "Lista 1 - Grafos",
+        "description": "Busca em Largura",
+        "type": "code",
+        "release_policy": "on_review",
+        "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
+        "config": {
+            "languages": [{"name": "python3", "starter_code": "def bfs(): pass"}],
+            "time_limit_sec": 2.0,
+            "memory_limit_mb": 128,
+            "rubric": "Rubrica do professor",
+            "test_cases": [{"id": 1, "input": "1\n", "expected_output": "1\n"}],
+        },
+    }
+    create_res1 = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json=code_payload,
+        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+    )
+    assert create_res1.status_code == 201
+    assignment1_id = create_res1.json()["id"]
+
+    # 3. Aluno verifica tarefas pendentes (estado inicial: pending, has_draft=False)
+    my_res1 = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert my_res1.status_code == 200
+    items1 = my_res1.json()
+    assert len(items1) == 1
+    assert items1[0]["id"] == assignment1_id
+    assert items1[0]["student_status"] == "pending"
+    assert items1[0]["has_draft"] is False
+    assert items1[0]["submission"] is None
+
+    sum_res1 = await async_client.get(
+        "/api/v1/assignments/my-assignments/summary",
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert sum_res1.status_code == 200
+    assert sum_res1.json() == {
+        "total": 1,
+        "pending": 1,
+        "overdue": 0,
+        "submitted": 0,
+        "graded": 0,
+    }
+
+    # 4. Aluno salva rascunho: status continua pending, mas has_draft=True
+    draft_res = await async_client.put(
+        f"/api/v1/assignments/{assignment1_id}/submissions/draft",
+        json={"content": {"language": "python3", "code": "# rascunho inicial"}},
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert draft_res.status_code == 200
+
+    my_res2 = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert my_res2.status_code == 200
+    items2 = my_res2.json()
+    assert len(items2) == 1
+    assert items2[0]["student_status"] == "pending"
+    assert items2[0]["has_draft"] is True
+    assert items2[0]["submission"] is None
+
+    # 5. Aluno realiza entrega formal: status passa a submitted, has_draft=False
+    submit_res = await async_client.post(
+        f"/api/v1/assignments/{assignment1_id}/submissions",
+        json={"content": {"language": "python3", "code": "def bfs(): return [1]"}},
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert submit_res.status_code == 201
+
+    my_res3 = await async_client.get(
+        "/api/v1/assignments/my-assignments",
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert my_res3.status_code == 200
+    items3 = my_res3.json()
+    assert len(items3) == 1
+    assert items3[0]["student_status"] == "submitted"
+    assert items3[0]["has_draft"] is False
+    assert items3[0]["submission"] is not None
+    assert items3[0]["submission"]["status"] in ("pending", "awaiting_review")
+
+    # 6. Professor cria 2ª atividade (prazo no passado)
+    overdue_payload = {
+        "title": "Quiz Antigo",
+        "description": "Prazo já expirou",
+        "type": "code",
+        "release_policy": "on_review",
+        "deadline": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+        "config": {
+            "languages": [{"name": "python3", "starter_code": "def old(): pass"}],
+            "time_limit_sec": 1.0,
+            "memory_limit_mb": 64,
+            "rubric": "",
+            "test_cases": [],
+        },
+    }
+    create_res2 = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json=overdue_payload,
+        headers={"Authorization": f"Bearer {tenant.teacher.token}"},
+    )
+    assert create_res2.status_code == 201
+
+    # 7. Aluno consulta summary consolidado: 1 submitted + 1 overdue = 2 total
+    sum_res2 = await async_client.get(
+        "/api/v1/assignments/my-assignments/summary",
+        headers={"Authorization": f"Bearer {tenant.student.token}"},
+    )
+    assert sum_res2.status_code == 200
+    assert sum_res2.json() == {
+        "total": 2,
+        "pending": 0,
+        "overdue": 1,
+        "submitted": 1,
+        "graded": 0,
+    }

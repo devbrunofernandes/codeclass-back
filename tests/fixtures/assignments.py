@@ -155,3 +155,121 @@ async def assignment_with_submissions(
     db_session.add(sub)
     await db_session.commit()
     return a
+
+
+from dataclasses import dataclass
+from decimal import Decimal
+
+
+@dataclass
+class StudentAssignmentsBundle:
+    classroom: Classroom
+    pending_assignment: Assignment
+    overdue_assignment: Assignment
+    draft_assignment: Assignment
+    submitted_assignment: Assignment
+    graded_assignment: Assignment
+    draft_submission: Submission
+    submitted_submission: Submission
+    graded_submission: Submission
+
+
+@pytest.fixture
+async def student_assignments_bundle(
+    tenant: TenantContext,
+    classroom: Classroom,
+    enrolled_student: ClassroomStudent,
+    create_assignment: Callable[..., Awaitable[Assignment]],
+    db_session: AsyncSession,
+) -> StudentAssignmentsBundle:
+    """Fixture completa com todos os status de atividades para o estudante."""
+    now = datetime.now(UTC)
+
+    # 1. Atividade pendente (sem submissão, dentro do prazo)
+    pending_a = await create_assignment(
+        classroom=classroom,
+        title="Atividade Pendente",
+        description="Dentro do prazo e sem entrega",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now + timedelta(days=5),
+    )
+
+    # 2. Atividade atrasada (sem submissão, prazo vencido)
+    overdue_a = await create_assignment(
+        classroom=classroom,
+        title="Atividade Atrasada",
+        description="Prazo expirado e sem entrega",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now - timedelta(days=2),
+    )
+
+    # 3. Atividade com rascunho (dentro do prazo, submissão draft)
+    draft_a = await create_assignment(
+        classroom=classroom,
+        title="Atividade em Rascunho",
+        description="Com rascunho salvo mas não entregue formalmente",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now + timedelta(days=5),
+    )
+    draft_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=draft_a.id,
+        student_id=tenant.student.user.id,
+        content={"code": "def draft(): pass", "language": "python3"},
+        status=SubmissionStatus.DRAFT,
+    )
+    db_session.add(draft_sub)
+
+    # 4. Atividade entregue (formalmente entregue, aguardando avaliação)
+    submitted_a = await create_assignment(
+        classroom=classroom,
+        title="Atividade Entregue",
+        description="Submetida formalmente",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now + timedelta(days=5),
+    )
+    submitted_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=submitted_a.id,
+        student_id=tenant.student.user.id,
+        content={"code": "def solution(): return 42", "language": "python3"},
+        status=SubmissionStatus.PENDING,
+    )
+    db_session.add(submitted_sub)
+
+    # 5. Atividade avaliada (publicada com nota)
+    graded_a = await create_assignment(
+        classroom=classroom,
+        title="Atividade Avaliada",
+        description="Nota publicada",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        deadline=now - timedelta(days=3),
+    )
+    graded_sub = Submission(
+        id=uuid.uuid4(),
+        assignment_id=graded_a.id,
+        student_id=tenant.student.user.id,
+        content={"code": "def solution(): return 100", "language": "python3"},
+        grade=Decimal("9.50"),
+        status=SubmissionStatus.PUBLISHED,
+    )
+    db_session.add(graded_sub)
+
+    await db_session.commit()
+
+    return StudentAssignmentsBundle(
+        classroom=classroom,
+        pending_assignment=pending_a,
+        overdue_assignment=overdue_a,
+        draft_assignment=draft_a,
+        submitted_assignment=submitted_a,
+        graded_assignment=graded_a,
+        draft_submission=draft_sub,
+        submitted_submission=submitted_sub,
+        graded_submission=graded_sub,
+    )

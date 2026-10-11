@@ -1,6 +1,7 @@
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -9,12 +10,17 @@ from app.api.deps import (
     get_db,
     require_assignment_permission,
     require_classroom_permission,
+    require_student,
 )
+from app.models.organization import OrganizationMember
 from app.schemas.assignment import (
     AssignmentCreateRequest,
     AssignmentStudentResponse,
     AssignmentTeacherResponse,
     AssignmentUpdateRequest,
+    StudentAssignmentFilterStatus,
+    StudentAssignmentItemResponse,
+    StudentAssignmentsSummaryResponse,
 )
 from app.schemas.runner import TestRunRequest, TestRunResponse
 from app.services.assignment_service import assignment_service
@@ -58,6 +64,42 @@ async def list_assignments(
     )
     return assignment_service.serialize_assignments_for_member(
         assignments, is_student=context.is_enrolled_student
+    )
+
+
+@router.get(
+    "/assignments/my-assignments",
+    response_model=list[StudentAssignmentItemResponse],
+    summary="Lista tarefas do aluno com status computado (pending, overdue, submitted, graded)",
+)
+async def list_my_assignments(
+    member: Annotated[OrganizationMember, Depends(require_student)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    classroom_id: Annotated[UUID | None, Query()] = None,
+    status: Annotated[StudentAssignmentFilterStatus | None, Query()] = None,
+) -> list[StudentAssignmentItemResponse]:
+    return await assignment_service.list_student_assignments(
+        member=member,
+        classroom_id=classroom_id,
+        status_filter=status,
+        db=db,
+    )
+
+
+@router.get(
+    "/assignments/my-assignments/summary",
+    response_model=StudentAssignmentsSummaryResponse,
+    summary="Retorna contadores consolidados de tarefas do aluno",
+)
+async def get_my_assignments_summary(
+    member: Annotated[OrganizationMember, Depends(require_student)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    classroom_id: Annotated[UUID | None, Query()] = None,
+) -> StudentAssignmentsSummaryResponse:
+    return await assignment_service.get_student_assignments_summary(
+        member=member,
+        classroom_id=classroom_id,
+        db=db,
     )
 
 

@@ -1,10 +1,12 @@
+import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.enums import AssignmentType, ReleasePolicyType
+from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
 
 # --- Modelos de Configuração do Docente (Com Gabarito e Rubricas) ---
 
@@ -248,3 +250,55 @@ class AssignmentStudentResponse(BaseModel):
                 "created_at": data.created_at,
             }
         return data
+
+
+# --- Modelos de Consulta de Tarefas do Aluno (HLD 8.5) ---
+
+
+class StudentAssignmentStatus(str, enum.Enum):
+    PENDING = "pending"
+    OVERDUE = "overdue"
+    SUBMITTED = "submitted"
+    GRADED = "graded"
+
+
+class StudentAssignmentFilterStatus(str, enum.Enum):
+    PENDING = "pending"
+    OVERDUE = "overdue"
+    SUBMITTED = "submitted"
+    GRADED = "graded"
+    UNSUBMITTED = "unsubmitted"
+
+
+class StudentAssignmentSubmissionBrief(BaseModel):
+    id: UUID
+    status: SubmissionStatus
+    grade: Decimal | None = None
+    submitted_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentAssignmentItemResponse(BaseModel):
+    id: UUID
+    classroom_id: UUID
+    classroom_name: str
+    title: str
+    description: str
+    type: AssignmentType
+    release_policy: ReleasePolicyType
+    deadline: datetime | None
+    created_at: datetime
+    student_status: StudentAssignmentStatus
+    has_draft: bool
+    submission: StudentAssignmentSubmissionBrief | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentAssignmentsSummaryResponse(BaseModel):
+    total: int
+    pending: int
+    overdue: int
+    submitted: int
+    graded: int

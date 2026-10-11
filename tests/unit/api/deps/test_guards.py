@@ -12,6 +12,7 @@ from app.api.deps.guards import (
     require_classroom_permission,
     require_org_member,
     require_roles,
+    require_student,
     require_submission_permission,
 )
 from app.core.exceptions import ForbiddenException
@@ -74,6 +75,20 @@ class TestRoleAndOrgGuards:
         checker = require_roles(OrgRole.OWNER, OrgRole.ADMIN)
         with pytest.raises(ForbiddenException):
             checker(member)
+
+    def test_require_student_when_student_should_succeed(self):
+        member = _create_mock_member(OrgRole.STUDENT)
+        assert require_student(member) == member
+
+    def test_require_student_when_not_student_should_raise_forbidden(self):
+        teacher = _create_mock_member(OrgRole.TEACHER)
+        admin = _create_mock_member(OrgRole.ADMIN)
+        owner = _create_mock_member(OrgRole.OWNER)
+
+        for non_student in (teacher, admin, owner):
+            with pytest.raises(ForbiddenException) as exc_info:
+                require_student(non_student)
+            assert "permissão insuficiente" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_require_org_member_when_matching_should_succeed(self):

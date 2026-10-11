@@ -38,6 +38,7 @@ def require_roles(*allowed_roles: OrgRole) -> Callable[..., OrganizationMember]:
 require_owner = require_roles(OrgRole.OWNER)
 require_admin_or_owner = require_roles(OrgRole.OWNER, OrgRole.ADMIN)
 require_teacher = require_roles(OrgRole.TEACHER)
+require_student = require_roles(OrgRole.STUDENT)
 require_teacher_admin_or_owner = require_roles(
     OrgRole.OWNER, OrgRole.ADMIN, OrgRole.TEACHER
 )
