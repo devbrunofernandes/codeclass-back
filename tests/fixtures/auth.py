@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import AsyncClient
 
-from app.infrastructure.auth import auth_service
-
 
 @pytest.fixture
 async def sample_user_and_org(
@@ -17,6 +15,8 @@ async def sample_user_and_org(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, Any]:
     """Cria uma organização e usuário proprietário de teste para autenticação."""
+    from app.infrastructure.auth import auth_service
+
     owner_id = uuid.uuid4()
     slug = f"org-auth-{owner_id.hex[:6]}"
     email = f"auth_owner_{owner_id.hex[:6]}@example.com"

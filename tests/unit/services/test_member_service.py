@@ -11,11 +11,6 @@ from app.schemas.organization import OrganizationMemberCreate
 from app.services.member_service import MemberService
 
 
-@pytest.fixture
-def member_svc() -> MemberService:
-    return MemberService()
-
-
 @pytest.mark.asyncio
 async def test_add_member_when_email_already_exists_raises_conflict(
     member_svc: MemberService,

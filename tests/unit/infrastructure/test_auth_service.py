@@ -8,11 +8,7 @@ from app.core.config import settings
 from app.core.exceptions import AuthError
 from app.infrastructure.auth.supabase_auth import AuthService
 
-
-@pytest.fixture
-def auth_svc() -> AuthService:
-    return AuthService()
-
+pytestmark = pytest.mark.usefixtures("mocked_blocking_io")
 
 # --- _create_raw_client & admin_client ---
 

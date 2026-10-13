@@ -113,21 +113,23 @@ def mock_runner_provider() -> MockRunnerProvider:
     return MockRunnerProvider()
 
 
-from app.services.runner_service import runner_service
-
-
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def override_runner_provider(
     mock_runner_provider: MockRunnerProvider,
 ) -> AsyncGenerator[MockRunnerProvider]:
-    """Sobrescreve o provedor de runner em todos os testes para garantir isolamento de rede."""
+    """Sobrescreve o runner nos testes solicitantes e restaura o provedor anterior."""
+    from app.services.runner_service import runner_service
+
+    previous_provider = runner_service.provider
     runner_service.provider = mock_runner_provider
     with patch(
         "app.infrastructure.runner.factory.get_runner_provider",
         return_value=mock_runner_provider,
     ):
-        yield mock_runner_provider
-    runner_service.provider = None
+        try:
+            yield mock_runner_provider
+        finally:
+            runner_service.provider = previous_provider
 
 
 @pytest.fixture

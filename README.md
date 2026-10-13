@@ -67,6 +67,36 @@ O ciclo de vida local é gerenciado via `Makefile`:
 
 ---
 
+## Testes por camada
+
+Os testes unitários executam sem PostgreSQL, Supabase ou rede:
+
+```bash
+uv run pytest tests/unit -q
+```
+
+Os testes de domínio não carregam a aplicação HTTP nem provedores externos. As
+fixtures reutilizáveis ficam em `tests/fixtures/` e são registradas em
+`tests/conftest.py`. Tentativas de rede nos unitários falham imediatamente. Os
+testes com SDKs mockados ou arquivos em memória também substituem o executor de
+threads; eles verificam o resultado e os erros dessas operações, sem validar o
+executor real.
+
+Os testes de API e integração usam PostgreSQL real. Inicie o ambiente com
+`make start` antes de executar `make test` ou a validação com cobertura:
+
+```bash
+uv run pytest --cov=app --cov-report=term-missing
+```
+
+A limpeza do banco acontece antes e depois de cada teste nesses dois escopos,
+inclusive em caso de falha. As fixtures `db_session` e `async_client` dependem
+explicitamente dessa limpeza. Testes de serviços que verificam persistência
+ficam em `tests/integration/services/`; as jornadas completas continuam em
+`tests/integration/test_*_lifecycle_integration.py`.
+
+---
+
 ## 🗄️ Banco de Dados e Migrações (Alembic)
 
 * **Criar nova migração:**

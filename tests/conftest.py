@@ -9,6 +9,9 @@ from tests.fixtures.tenants import TenantContext, TenantMember
 
 pytest_plugins = [
     "tests.fixtures.core",
+    "tests.fixtures.tokens",
+    "tests.fixtures.unit_services",
+    "tests.fixtures.isolation",
     "tests.fixtures.tenants",
     "tests.fixtures.classrooms",
     "tests.fixtures.assignments",

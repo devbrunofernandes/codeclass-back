@@ -4,53 +4,9 @@ import pytest
 
 from app.infrastructure.ai.base import AiProvider
 from app.models.assignment import Assignment
-from app.models.enums import AssignmentType, ReleasePolicyType
+from app.models.enums import ReleasePolicyType
 from app.schemas.submission import AiInsightResult, AiItemInsightSchema
 from app.services.ai_service import AiService
-
-
-@pytest.fixture
-def dummy_code_assignment() -> Assignment:
-    assignment = Assignment(
-        title="Busca Binária",
-        description="Implemente busca binária recursiva ou iterativa",
-        type=AssignmentType.CODE,
-        release_policy=ReleasePolicyType.ON_REVIEW,
-        config={
-            "max_grade": 10.0,
-            "languages": [{"name": "python3"}],
-            "rubrics": "Complexidade O(log n) e tratamento de lista vazia.",
-        },
-    )
-    return assignment
-
-
-@pytest.fixture
-def dummy_questionnaire_assignment() -> Assignment:
-    assignment = Assignment(
-        title="Estruturas de Dados",
-        description="Questionário misto",
-        type=AssignmentType.QUESTIONNAIRE,
-        release_policy=ReleasePolicyType.ON_REVIEW,
-        config={
-            "questions": [
-                {
-                    "id": 1,
-                    "type": "choice",
-                    "points": 4.0,
-                    "correct_option_id": "b",
-                },
-                {
-                    "id": 2,
-                    "type": "open",
-                    "points": 6.0,
-                    "prompt": "Explique tabelas hash.",
-                    "reference_answer": "Estrutura com buckets e encadeamento.",
-                },
-            ]
-        },
-    )
-    return assignment
 
 
 @pytest.mark.asyncio

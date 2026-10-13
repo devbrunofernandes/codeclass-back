@@ -192,11 +192,11 @@ def mock_ai_insight_questionnaire() -> dict:
     }
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_ai_service(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncMock | None:
-    """Mock automático do AiService para evitar chamadas de rede externas.
+    """Mock do AiService solicitado pelas suítes de API e integração.
 
     Se o teste estiver anotado com @pytest.mark.live, o mock é desativado para permitir a conexão real.
     """

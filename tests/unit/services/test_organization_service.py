@@ -22,11 +22,6 @@ from app.schemas.user import UserCreate
 from app.services.organization_service import OrganizationService
 
 
-@pytest.fixture
-def org_svc() -> OrganizationService:
-    return OrganizationService()
-
-
 @pytest.mark.asyncio
 async def test_register_organization_duplicate_email_raises_409(
     org_svc: OrganizationService,

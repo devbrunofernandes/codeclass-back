@@ -11,6 +11,8 @@ from app.infrastructure.storage.supabase_provider import (
     _prepare_upload_file,
 )
 
+pytestmark = pytest.mark.usefixtures("mocked_blocking_io")
+
 
 def test_get_storage_provider_default():
     provider = get_storage_provider()

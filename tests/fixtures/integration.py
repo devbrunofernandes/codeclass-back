@@ -7,7 +7,6 @@ import pytest
 from httpx import AsyncClient
 
 from app.core.exceptions import AuthError
-from app.infrastructure.auth import auth_service
 
 
 @dataclass
@@ -41,6 +40,8 @@ class OrgContext:
 @pytest.fixture
 async def registered_org(async_client: AsyncClient) -> AsyncGenerator[OrgContext]:
     """Cria uma organização e Owner reais no Supabase Auth e Postgres para testes de integração."""
+    from app.infrastructure.auth import auth_service
+
     unique_suffix = uuid.uuid4().hex[:8]
     org_slug = f"int-org-{unique_suffix}"
     owner_email = f"owner_{unique_suffix}@codeclass-int.com"

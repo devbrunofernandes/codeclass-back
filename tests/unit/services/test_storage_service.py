@@ -1,6 +1,6 @@
 import io
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import UploadFile
@@ -12,22 +12,7 @@ from app.services.storage_service import (
     StorageService,
 )
 
-
-@pytest.fixture
-def mock_storage_provider() -> MagicMock:
-    provider = MagicMock(spec=StorageProvider)
-    provider.upload_file = AsyncMock()
-    provider.get_signed_url = AsyncMock(
-        return_value="https://storage.example.com/signed"
-    )
-    provider.list_files = AsyncMock(return_value=[])
-    provider.delete_file = AsyncMock()
-    return provider
-
-
-@pytest.fixture
-def storage_service(mock_storage_provider: MagicMock) -> StorageService:
-    return StorageService(provider=mock_storage_provider)
+pytestmark = pytest.mark.usefixtures("mocked_blocking_io")
 
 
 def test_storage_service_default_provider(monkeypatch: pytest.MonkeyPatch):
