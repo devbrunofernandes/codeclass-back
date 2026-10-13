@@ -69,7 +69,7 @@ class OpenAnswerDraftContent(BaseModel):
 
 AnswerItemDraftContent = Annotated[
     ChoiceAnswerDraftContent | OpenAnswerDraftContent,
-    Field(union_mode="left_to_right"),
+    Field(union_mode="smart"),
 ]
 
 

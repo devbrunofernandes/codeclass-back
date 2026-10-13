@@ -27,6 +27,17 @@ class SubmissionEvaluationService:
         db: AsyncSession,
     ) -> SubmissionEvaluation:
         """Registra ou atualiza a avaliação docente formal de uma submissão."""
+        current = (
+            await db.execute(
+                select(Submission)
+                .where(Submission.id == submission.id)
+                .with_for_update(of=Submission)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise NotFoundException("Submissão não encontrada.")
+        submission = current
         if submission.status == SubmissionStatus.DRAFT:
             raise BadRequestException("Não é possível avaliar uma entrega em rascunho.")
         if submission.status == SubmissionStatus.PENDING:

@@ -17,6 +17,7 @@ from app.core.exceptions import (
 )
 from app.domain.grading.questionnaire_grader import QuestionnaireGrader
 from app.models.assignment import Assignment
+from app.models.classroom import Classroom
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
 from app.models.submission import (
     Submission,
@@ -72,6 +73,8 @@ class SubmissionLifecycleService:
         # 2. Verifica submissão existente
         stmt = (
             select(Submission)
+            .with_for_update(of=Submission)
+            .execution_options(populate_existing=True)
             .options(selectinload(Submission.ai_insight))
             .where(
                 Submission.assignment_id == assignment.id,
@@ -167,6 +170,15 @@ class SubmissionLifecycleService:
                 f"Tipo de atividade não suportado: {assignment.type}"
             )
 
+        attempt_id = uuid.uuid4()
+        organization_id = await db.scalar(
+            select(Classroom.organization_id).where(
+                Classroom.id == assignment.classroom_id
+            )
+        )
+        if organization_id is None:
+            raise NotFoundException("Organização da atividade não encontrada.")
+
         # 4. Criação ou atualização do registro
         if existing_sub:
             sub = existing_sub
@@ -183,6 +195,8 @@ class SubmissionLifecycleService:
                 grade=calculated_grade,
             )
             db.add(sub)
+
+        sub.processing_attempt_id = attempt_id
 
         # 5. Configuração do registro de ai_insight se necessário
         if needs_ai_task:
@@ -233,7 +247,10 @@ class SubmissionLifecycleService:
         # 6. Agenda worker de IA assíncrona se necessário
         if needs_ai_task and background_tasks:
             background_tasks.add_task(
-                submission_ai_worker.process_submission_ai_task, sub.id
+                submission_ai_worker.process_submission_ai_task,
+                sub.id,
+                attempt_id,
+                organization_id,
             )
 
         return sub
@@ -246,6 +263,8 @@ class SubmissionLifecycleService:
     ) -> Submission:
         stmt = (
             select(Submission)
+            .with_for_update(of=Submission)
+            .execution_options(populate_existing=True)
             .options(selectinload(Submission.evaluation))
             .where(
                 Submission.assignment_id == assignment.id,
@@ -272,6 +291,7 @@ class SubmissionLifecycleService:
             )
 
         sub.status = SubmissionStatus.DRAFT
+        sub.processing_attempt_id = None
         await db.commit()
         await db.refresh(sub)
         return sub
@@ -315,7 +335,12 @@ class SubmissionLifecycleService:
         # 3. Consulta submissão existente
         stmt = (
             select(Submission)
-            .options(selectinload(Submission.evaluation))
+            .with_for_update(of=Submission)
+            .execution_options(populate_existing=True)
+            .options(
+                selectinload(Submission.evaluation),
+                selectinload(Submission.ai_insight),
+            )
             .where(
                 Submission.assignment_id == assignment.id,
                 Submission.student_id == student_id,
@@ -339,6 +364,8 @@ class SubmissionLifecycleService:
                 )
 
             # Atualiza rascunho existente
+            if sub.content != content_data:
+                sub.ai_insight = None
             sub.content = content_data
             sub.status = SubmissionStatus.DRAFT
             sub.submitted_at = func.now()  # type: ignore[assignment]
@@ -360,7 +387,12 @@ class SubmissionLifecycleService:
             # Tratamento defensivo de corrida concorrente de criação inicial de rascunho
             stmt = (
                 select(Submission)
-                .options(selectinload(Submission.evaluation))
+                .with_for_update(of=Submission)
+                .execution_options(populate_existing=True)
+                .options(
+                    selectinload(Submission.evaluation),
+                    selectinload(Submission.ai_insight),
+                )
                 .where(
                     Submission.assignment_id == assignment_id,
                     Submission.student_id == student_id,
@@ -381,6 +413,8 @@ class SubmissionLifecycleService:
                 raise BadRequestException(
                     "A atividade já foi submetida formalmente. Para editar o rascunho, desfaça a entrega primeiro (unsubmit)."
                 )
+            if sub.content != content_data:
+                sub.ai_insight = None
             sub.content = content_data
             sub.status = SubmissionStatus.DRAFT
             sub.submitted_at = func.now()  # type: ignore[assignment]

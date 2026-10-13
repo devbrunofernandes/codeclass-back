@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment
@@ -2128,3 +2129,88 @@ async def test_retry_ai_when_already_pending_should_return_400(
     )
     assert response.status_code == 400
     assert "já se encontra em processamento de ia" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_unsubmit_resubmit_when_valid_should_rotate_internal_attempt(
+    async_client,
+    tenant,
+    assignment_without_submissions,
+    enrolled_student,
+    db_session,
+):
+    assignment = assignment_without_submissions
+    url = f"/api/v1/assignments/{assignment.id}/submissions"
+    response = await async_client.post(
+        url,
+        headers=tenant.student.auth_headers,
+        json={"content": {"language": "python3", "code": "print(1)"}},
+    )
+    assert response.status_code == 201
+    assert "processing_attempt_id" not in response.json()
+    sub_id = uuid.UUID(response.json()["id"])
+    first = await db_session.scalar(
+        select(Submission.processing_attempt_id).where(Submission.id == sub_id)
+    )
+    assert first is not None
+    response = await async_client.post(
+        url + "/unsubmit", headers=tenant.student.auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "draft"
+    assert (
+        await db_session.scalar(
+            select(Submission.processing_attempt_id).where(Submission.id == sub_id)
+        )
+        is None
+    )
+    response = await async_client.post(
+        url,
+        headers=tenant.student.auth_headers,
+        json={"content": {"language": "python3", "code": "print(2)"}},
+    )
+    assert response.status_code == 201
+    assert response.json()["id"] == str(sub_id)
+    second = await db_session.scalar(
+        select(Submission.processing_attempt_id).where(Submission.id == sub_id)
+    )
+    assert second is not None and second != first
+
+
+@pytest.mark.asyncio
+async def test_retry_ai_when_valid_should_rotate_internal_attempt(
+    async_client,
+    tenant,
+    submission_awaiting_review,
+    db_session,
+):
+    sub = submission_awaiting_review
+    old = sub.processing_attempt_id
+    response = await async_client.post(
+        f"/api/v1/submissions/{sub.id}/retry-ai",
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 200
+    assert "processing_attempt_id" not in response.json()
+    current = await db_session.scalar(
+        select(Submission.processing_attempt_id).where(Submission.id == sub.id)
+    )
+    assert current is not None and current != old
+
+
+@pytest.mark.asyncio
+async def test_save_questionnaire_draft_when_open_answer_should_preserve_text(
+    async_client,
+    tenant,
+    mixed_questionnaire_assignment,
+    enrolled_student,
+):
+    response = await async_client.put(
+        f"/api/v1/assignments/{mixed_questionnaire_assignment.id}/submissions/draft",
+        headers=tenant.student.auth_headers,
+        json={"content": {"answers": [{"question_id": 2, "text_answer": "original"}]}},
+    )
+    assert response.status_code == 200
+    assert response.json()["content"]["answers"] == [
+        {"question_id": 2, "text_answer": "original"}
+    ]

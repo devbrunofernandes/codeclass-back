@@ -1,11 +1,14 @@
 import logging
 import uuid
+from copy import deepcopy
 from decimal import Decimal
 
 from fastapi import BackgroundTasks
-from sqlalchemy import select
+from sqlalchemy import and_, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.database import async_session_maker
 from app.core.exceptions import (
@@ -13,11 +16,13 @@ from app.core.exceptions import (
     NotFoundException,
 )
 from app.models.assignment import Assignment
+from app.models.classroom import Classroom
 from app.models.enums import AssignmentType, SubmissionStatus
 from app.models.submission import (
     Submission,
     SubmissionAiInsight,
 )
+from app.schemas.submission import AiInsightResult
 from app.services.ai_service import ai_service
 
 logger = logging.getLogger(__name__)
@@ -26,94 +31,118 @@ logger = logging.getLogger(__name__)
 class SubmissionAiWorker:
     """Worker assíncrono para processamento e reavaliação de submissões com IA."""
 
-    async def process_submission_ai_task(self, submission_id: uuid.UUID) -> None:
-        """Executa a inferência pedagógica assíncrona com IA em sessão isolada de banco."""
-        async with async_session_maker() as session:
-            try:
-                stmt = (
-                    select(Submission)
-                    .options(
-                        joinedload(Submission.assignment),
-                        joinedload(Submission.ai_insight),
-                    )
-                    .where(Submission.id == submission_id)
-                )
-                result = await session.execute(stmt)
-                sub = result.scalar_one_or_none()
-                if not sub or not sub.assignment:
-                    logger.warning(
-                        "Submissão %s não encontrada para processamento de IA.",
-                        submission_id,
-                    )
-                    return
+    @staticmethod
+    def _attempt_scope(
+        submission_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        organization_id: uuid.UUID,
+    ) -> ColumnElement[bool]:
+        return and_(
+            Submission.id == submission_id,
+            Submission.processing_attempt_id == attempt_id,
+            Submission.status == SubmissionStatus.PENDING,
+            Submission.assignment_id.in_(
+                select(Assignment.id)
+                .join(Classroom, Assignment.classroom_id == Classroom.id)
+                .where(Classroom.organization_id == organization_id)
+            ),
+        )
 
-                if sub.status != SubmissionStatus.PENDING:
-                    logger.info(
-                        "Submissão %s não está no status PENDING (%s), pulando IA.",
-                        submission_id,
-                        sub.status,
-                    )
-                    return
-
-                # Chama AiService para gerar os pareceres e notas
-                insight = await ai_service.evaluate_submission(
-                    assignment=sub.assignment,
-                    submission_content=sub.content,
-                )
-
-                if not sub.ai_insight:
-                    sub.ai_insight = SubmissionAiInsight(submission_id=sub.id)
-                    session.add(sub.ai_insight)
-
-                sub.ai_insight.status = "completed"
-                sub.ai_insight.suggested_grade = Decimal(str(insight.suggested_grade))
-                sub.ai_insight.max_grade = Decimal(str(insight.max_grade))
-                sub.ai_insight.reasoning = insight.reasoning
-                sub.ai_insight.strengths = insight.strengths
-                sub.ai_insight.improvements = insight.improvements
-                sub.ai_insight.item_insights = (
+    async def _complete_attempt(
+        self,
+        submission_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        insight: AiInsightResult | None,
+        error_message: str | None = None,
+    ) -> None:
+        # The conditional UPDATE claims completion and holds a short row lock.
+        # Insights and state commit together; duplicate/obsolete jobs affect zero rows.
+        async with async_session_maker() as session, session.begin():
+            claimed = await session.scalar(
+                update(Submission)
+                .where(self._attempt_scope(submission_id, attempt_id, organization_id))
+                .values(status=SubmissionStatus.AWAITING_REVIEW)
+                .returning(Submission.id)
+            )
+            if claimed is None:
+                return
+            values = {
+                "submission_id": submission_id,
+                "status": "completed" if insight else "failed",
+                "suggested_grade": Decimal(str(insight.suggested_grade))
+                if insight
+                else None,
+                "max_grade": Decimal(str(insight.max_grade)) if insight else None,
+                "reasoning": insight.reasoning if insight else None,
+                "strengths": insight.strengths if insight else [],
+                "improvements": insight.improvements if insight else [],
+                "item_insights": (
                     [item.model_dump() for item in insight.item_insights]
-                    if insight.item_insights
+                    if insight and insight.item_insights
                     else None
+                ),
+                "error_message": error_message,
+            }
+            statement = insert(SubmissionAiInsight).values(**values)
+            await session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[SubmissionAiInsight.submission_id],
+                    set_={**values, "updated_at": func.now()},
                 )
-                sub.ai_insight.error_message = None
+            )
 
-                # Transita status para AWAITING_REVIEW (pronto para o professor)
-                sub.status = SubmissionStatus.AWAITING_REVIEW
-                await session.commit()
-                logger.info(
-                    "Processamento de IA concluído para submissão %s.", submission_id
-                )
-
-            except Exception as exc:
-                logger.exception(
-                    "Falha ao processar submissão %s com IA", submission_id
-                )
-                await session.rollback()
-
-                # Resiliência: marca status='failed' e transita submissão para AWAITING_REVIEW (HLD 9.2)
-                try:
-                    stmt = (
+    async def process_submission_ai_task(
+        self,
+        submission_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        organization_id: uuid.UUID,
+    ) -> None:
+        """Captura a tentativa em sessão própria, sem transação durante a inferência."""
+        try:
+            async with async_session_maker() as session:
+                sub = (
+                    await session.execute(
                         select(Submission)
-                        .options(joinedload(Submission.ai_insight))
-                        .where(Submission.id == submission_id)
+                        .options(joinedload(Submission.assignment))
+                        .where(
+                            self._attempt_scope(
+                                submission_id, attempt_id, organization_id
+                            )
+                        )
                     )
-                    result = await session.execute(stmt)
-                    sub = result.scalar_one_or_none()
-                    if sub:
-                        if not sub.ai_insight:
-                            sub.ai_insight = SubmissionAiInsight(submission_id=sub.id)
-                            session.add(sub.ai_insight)
-                        sub.ai_insight.status = "failed"
-                        sub.ai_insight.error_message = str(exc)
-                        sub.status = SubmissionStatus.AWAITING_REVIEW
-                        await session.commit()
-                except Exception as inner_exc:  # noqa: BLE001
-                    logger.error(
-                        "Falha ao registrar status de fallback para submissão %s: %s",
-                        submission_id,
-                        inner_exc,
-                    )
+                ).scalar_one_or_none()
+                if sub is None or sub.status != SubmissionStatus.PENDING:
+                    return
+                assignment = sub.assignment
+                content = deepcopy(sub.content)
+                session.expunge(assignment)
+
+            insight = await ai_service.evaluate_submission(
+                assignment=assignment,
+                submission_content=content,
+            )
+            await self._complete_attempt(
+                submission_id,
+                attempt_id,
+                organization_id,
+                insight,
+            )
+        except Exception as exc:
+            logger.exception("Falha ao processar submissão %s com IA", submission_id)
+            try:
+                await self._complete_attempt(
+                    submission_id,
+                    attempt_id,
+                    organization_id,
+                    None,
+                    str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "Falha ao registrar fallback para submissão %s",
+                    submission_id,
+                )
 
     async def retry_ai_evaluation(
         self,
@@ -124,6 +153,8 @@ class SubmissionAiWorker:
         """Reinicia a análise assíncrona de IA para uma submissão."""
         stmt = (
             select(Submission)
+            .with_for_update(of=Submission)
+            .execution_options(populate_existing=True)
             .options(
                 selectinload(Submission.assignment),
                 selectinload(Submission.ai_insight),
@@ -179,6 +210,15 @@ class SubmissionAiWorker:
             )
             db.add(sub.ai_insight)
 
+        attempt_id = uuid.uuid4()
+        organization_id = await db.scalar(
+            select(Classroom.organization_id).where(
+                Classroom.id == assignment.classroom_id
+            )
+        )
+        if organization_id is None:
+            raise NotFoundException("Organização da atividade não encontrada.")
+        sub.processing_attempt_id = attempt_id
         sub.status = SubmissionStatus.PENDING
         await db.commit()
 
@@ -195,7 +235,9 @@ class SubmissionAiWorker:
         )
         sub = (await db.execute(reload_stmt)).scalar_one()
 
-        background_tasks.add_task(self.process_submission_ai_task, sub.id)
+        background_tasks.add_task(
+            self.process_submission_ai_task, sub.id, attempt_id, organization_id
+        )
         return sub
 
 

@@ -64,6 +64,12 @@ class Submission(Base):
         server_default=text("'pending'"),
         nullable=False,
     )
+    processing_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        default=None,
+        server_default=func.gen_random_uuid(),
+    )
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

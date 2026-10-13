@@ -1003,3 +1003,320 @@ async def test_submission_draft_autosave_lifecycle_and_ai_retry_e2e(
         headers=tenant.teacher.auth_headers,
     )
     assert post_pub_retry.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "unsubmit",
+        "resubmit",
+        "resubmit_complete",
+        "retry",
+        "delete",
+        "delete_org",
+        "duplicate",
+        "current",
+    ],
+)
+@pytest.mark.parametrize("fails", [False, True])
+async def test_ai_completion_when_delivery_changes_should_preserve_current_attempt(
+    assignment_without_submissions,
+    enrolled_student,
+    tenant,
+    db_session,
+    mock_ai_service,
+    operation,
+    fails,
+):
+    import asyncio
+
+    from sqlalchemy import delete
+
+    from app.core.database import async_session_maker
+    from app.models.organization import Organization
+    from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
+    from app.services.submission import (
+        submission_ai_worker,
+        submission_lifecycle_service,
+    )
+
+    assignment = assignment_without_submissions
+    request = SubmissionCreateRequest(
+        content=CodeSubmissionContent(language="python3", code="print(1)")
+    )
+    sub = await submission_lifecycle_service.submit_assignment(
+        assignment, enrolled_student.student_id, request, db_session
+    )
+    sub_id = sub.id
+    attempt = sub.processing_attempt_id
+    started, release = asyncio.Event(), asyncio.Event()
+    original_provider = mock_ai_service.side_effect
+
+    async def paused_provider(**kwargs):
+        started.set()
+        await release.wait()
+        if fails:
+            raise RuntimeError("old attempt failed")
+        result = await original_provider(**kwargs)
+        result.reasoning = "old attempt"
+        return result
+
+    mock_ai_service.side_effect = paused_provider
+    task = asyncio.create_task(
+        submission_ai_worker.process_submission_ai_task(sub_id, attempt, tenant.org.id)
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        if operation in ("unsubmit", "resubmit", "resubmit_complete"):
+            await submission_lifecycle_service.unsubmit_assignment(
+                assignment, enrolled_student.student_id, db_session
+            )
+            if operation in ("resubmit", "resubmit_complete"):
+                request.content.code = "print(2)"
+                sub = await submission_lifecycle_service.submit_assignment(
+                    assignment, enrolled_student.student_id, request, db_session
+                )
+                assert sub.processing_attempt_id != attempt
+                if operation == "resubmit_complete":
+                    mock_ai_service.side_effect = original_provider
+                    await submission_ai_worker.process_submission_ai_task(
+                        sub_id, sub.processing_attempt_id, tenant.org.id
+                    )
+        elif operation == "delete":
+            await db_session.execute(delete(Submission).where(Submission.id == sub_id))
+            await db_session.commit()
+        elif operation == "delete_org":
+            await db_session.execute(
+                delete(Organization).where(Organization.id == tenant.org.id)
+            )
+            await db_session.commit()
+        elif operation in ("duplicate", "retry"):
+            mock_ai_service.side_effect = original_provider
+            await submission_ai_worker.process_submission_ai_task(
+                sub_id, attempt, tenant.org.id
+            )
+            if operation == "retry":
+                from fastapi import BackgroundTasks
+
+                sub = await submission_ai_worker.retry_ai_evaluation(
+                    sub, db_session, BackgroundTasks()
+                )
+                assert sub.processing_attempt_id != attempt
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=10)
+
+    async with async_session_maker() as verification:
+        persisted = (
+            await verification.execute(
+                select(Submission)
+                .options(selectinload(Submission.ai_insight))
+                .where(Submission.id == sub_id)
+            )
+        ).scalar_one_or_none()
+        if operation in ("delete", "delete_org"):
+            assert persisted is None
+        elif operation == "unsubmit":
+            assert persisted.status == SubmissionStatus.DRAFT
+            assert persisted.processing_attempt_id is None
+            assert persisted.ai_insight.status == "in_progress"
+        elif operation in ("resubmit", "retry"):
+            assert persisted.status == SubmissionStatus.PENDING
+            assert persisted.content["code"] == (
+                "print(1)" if operation == "retry" else "print(2)"
+            )
+            assert persisted.ai_insight.status == "in_progress"
+            assert persisted.ai_insight.reasoning is None
+        else:
+            assert persisted.status == SubmissionStatus.AWAITING_REVIEW
+            if operation in ("duplicate", "resubmit_complete"):
+                assert persisted.ai_insight.reasoning != "old attempt"
+            assert persisted.ai_insight.status == (
+                "failed" if fails and operation == "current" else "completed"
+            )
+
+
+@pytest.mark.asyncio
+async def test_worker_when_wrong_organization_should_ignore_success_and_fallback(
+    assignment_without_submissions,
+    enrolled_student,
+    tenant,
+    db_session,
+    mock_ai_service,
+):
+    from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
+    from app.services.submission import (
+        submission_ai_worker,
+        submission_lifecycle_service,
+    )
+
+    sub = await submission_lifecycle_service.submit_assignment(
+        assignment_without_submissions,
+        enrolled_student.student_id,
+        SubmissionCreateRequest(
+            content=CodeSubmissionContent(language="python3", code="print(1)")
+        ),
+        db_session,
+    )
+    wrong_org = uuid.uuid4()
+    await submission_ai_worker.process_submission_ai_task(
+        sub.id, sub.processing_attempt_id, wrong_org
+    )
+    await submission_ai_worker._complete_attempt(
+        sub.id, sub.processing_attempt_id, wrong_org, None, "wrong tenant"
+    )
+    mock_ai_service.assert_not_awaited()
+    await db_session.refresh(sub)
+    assert sub.status == SubmissionStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_completion_when_insight_persistence_fails_should_rollback_state(
+    assignment_without_submissions,
+    enrolled_student,
+    tenant,
+    db_session,
+    monkeypatch,
+):
+    from unittest.mock import MagicMock
+
+    from app.schemas.submission import CodeSubmissionContent, SubmissionCreateRequest
+    from app.services.submission import (
+        submission_ai_worker,
+        submission_lifecycle_service,
+    )
+
+    sub = await submission_lifecycle_service.submit_assignment(
+        assignment_without_submissions,
+        enrolled_student.student_id,
+        SubmissionCreateRequest(
+            content=CodeSubmissionContent(language="python3", code="print(1)")
+        ),
+        db_session,
+    )
+    monkeypatch.setattr(
+        "app.services.submission.ai_worker.insert",
+        MagicMock(side_effect=RuntimeError("insight write failed")),
+    )
+    with pytest.raises(RuntimeError, match="insight write failed"):
+        await submission_ai_worker._complete_attempt(
+            sub.id, sub.processing_attempt_id, tenant.org.id, None, "provider failed"
+        )
+    await db_session.refresh(sub)
+    assert sub.status == SubmissionStatus.PENDING
+    insight = (
+        (
+            await db_session.execute(
+                select(Submission)
+                .options(selectinload(Submission.ai_insight))
+                .where(Submission.id == sub.id)
+            )
+        )
+        .scalar_one()
+        .ai_insight
+    )
+    assert insight.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_evaluation_when_loaded_before_unsubmit_should_revalidate_draft(
+    submission_awaiting_review,
+    assignment_without_submissions,
+    enrolled_student,
+    db_session,
+):
+    from app.core.database import async_session_maker
+    from app.core.exceptions import BadRequestException
+    from app.schemas.evaluation import SubmissionEvaluationRequest
+    from app.services.submission import (
+        submission_evaluation_service,
+        submission_lifecycle_service,
+    )
+
+    async with async_session_maker() as teacher_session:
+        stale = await teacher_session.get(Submission, submission_awaiting_review.id)
+        assert stale.status == SubmissionStatus.AWAITING_REVIEW
+        await submission_lifecycle_service.unsubmit_assignment(
+            assignment_without_submissions, enrolled_student.student_id, db_session
+        )
+        with pytest.raises(BadRequestException, match="rascunho"):
+            await submission_evaluation_service.evaluate_submission(
+                stale,
+                SubmissionEvaluationRequest(grade=9, publish=True),
+                teacher_session,
+            )
+    await db_session.refresh(submission_awaiting_review)
+    assert submission_awaiting_review.status == SubmissionStatus.DRAFT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("assignment_kind", ["code", "questionnaire"])
+@pytest.mark.parametrize("edited", [True, False])
+async def test_resubmit_when_completed_draft_saved_should_reuse_only_unchanged_insight(
+    assignment_without_submissions,
+    mixed_questionnaire_assignment,
+    create_submission,
+    enrolled_student,
+    tenant,
+    db_session,
+    assignment_kind,
+    edited,
+):
+    from app.schemas.submission import SubmissionCreateRequest, SubmissionDraftRequest
+    from app.services.submission import (
+        submission_ai_worker,
+        submission_lifecycle_service,
+    )
+
+    if assignment_kind == "code":
+        assignment = assignment_without_submissions
+        original = {"language": "python3", "code": "print(1)"}
+        content = {"language": "python3", "code": "print(2)" if edited else "print(1)"}
+    else:
+        assignment = mixed_questionnaire_assignment
+        original = {"answers": [{"question_id": 2, "text_answer": "original"}]}
+        content = {
+            "answers": [
+                {"question_id": 2, "text_answer": "edited" if edited else "original"}
+            ]
+        }
+    previous = await create_submission(
+        assignment=assignment,
+        student_id=enrolled_student.student_id,
+        status=SubmissionStatus.AWAITING_REVIEW,
+        content=original,
+        ai_insight_status="completed",
+    )
+    old_attempt = previous.processing_attempt_id
+    await submission_lifecycle_service.unsubmit_assignment(
+        assignment, enrolled_student.student_id, db_session
+    )
+    await submission_lifecycle_service.save_draft_submission(
+        assignment,
+        enrolled_student.student_id,
+        SubmissionDraftRequest.model_validate({"content": content}),
+        db_session,
+    )
+    sub = await submission_lifecycle_service.submit_assignment(
+        assignment,
+        enrolled_student.student_id,
+        SubmissionCreateRequest.model_validate({"content": content}),
+        db_session,
+    )
+    assert sub.processing_attempt_id != old_attempt
+    await db_session.refresh(sub, ["ai_insight"])
+    if edited:
+        assert sub.status == SubmissionStatus.PENDING
+        assert sub.ai_insight.status == "in_progress"
+        assert sub.ai_insight.reasoning is None
+        await submission_ai_worker.process_submission_ai_task(
+            sub.id, sub.processing_attempt_id, tenant.org.id
+        )
+        await db_session.refresh(sub, ["status", "ai_insight"])
+        assert sub.status == SubmissionStatus.AWAITING_REVIEW
+        assert sub.ai_insight.status == "completed"
+    else:
+        assert sub.status == SubmissionStatus.AWAITING_REVIEW
+        assert sub.ai_insight.status == "completed"
+        assert sub.ai_insight.reasoning == "Parecer gerado pelo mock"

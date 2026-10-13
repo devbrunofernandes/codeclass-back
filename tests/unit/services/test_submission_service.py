@@ -108,7 +108,7 @@ async def test_process_submission_ai_task_when_not_pending_should_skip():
         ) as mock_ai,
     ):
         mock_session.__aenter__.return_value = mock_session
-        await service.process_submission_ai_task(sub_id)
+        await service.process_submission_ai_task(sub_id, uuid.uuid4(), uuid.uuid4())
 
     mock_ai.assert_not_called()
 
@@ -124,9 +124,11 @@ async def test_process_submission_ai_task_when_success_should_update_insight_and
     mock_sub.content = {"code": "print(1)", "language": "python3"}
     mock_sub.assignment = MagicMock()
     mock_sub.ai_insight = None
+    service._complete_attempt = AsyncMock()
 
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
+    mock_session.expunge = MagicMock()
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_sub
     mock_session.execute.return_value = mock_result
@@ -151,14 +153,11 @@ async def test_process_submission_ai_task_when_success_should_update_insight_and
     ):
         mock_session.__aenter__.return_value = mock_session
         mock_ai.return_value = mock_insight_result
-        await service.process_submission_ai_task(sub_id)
+        await service.process_submission_ai_task(sub_id, uuid.uuid4(), uuid.uuid4())
 
-    assert mock_sub.status == SubmissionStatus.AWAITING_REVIEW
-    assert mock_sub.ai_insight.status == "completed"
-    assert mock_sub.ai_insight.suggested_grade == Decimal("9.0")
-    assert mock_sub.ai_insight.max_grade == Decimal("10.0")
-    assert mock_sub.ai_insight.reasoning == "Excelente"
-    mock_session.commit.assert_awaited_once()
+    service._complete_attempt.assert_awaited_once()
+    assert service._complete_attempt.await_args.args[3] is mock_insight_result
+    mock_session.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -172,9 +171,11 @@ async def test_process_submission_ai_task_when_failure_should_fallback_to_failed
     mock_sub.content = {"code": "print(1)", "language": "python3"}
     mock_sub.assignment = MagicMock()
     mock_sub.ai_insight = MagicMock()
+    service._complete_attempt = AsyncMock()
 
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
+    mock_session.expunge = MagicMock()
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = mock_sub
     mock_session.execute.return_value = mock_result
@@ -191,12 +192,13 @@ async def test_process_submission_ai_task_when_failure_should_fallback_to_failed
     ):
         mock_session.__aenter__.return_value = mock_session
         mock_ai.side_effect = RuntimeError("Gemini API rate limit exceeded")
-        await service.process_submission_ai_task(sub_id)
+        await service.process_submission_ai_task(sub_id, uuid.uuid4(), uuid.uuid4())
 
-    assert mock_sub.status == SubmissionStatus.AWAITING_REVIEW
-    assert mock_sub.ai_insight.status == "failed"
-    assert "Gemini API rate limit exceeded" in mock_sub.ai_insight.error_message
-    mock_session.rollback.assert_awaited_once()
+    service._complete_attempt.assert_awaited_once()
+    assert service._complete_attempt.await_args.args[3] is None
+    assert (
+        "Gemini API rate limit exceeded" in service._complete_attempt.await_args.args[4]
+    )
 
 
 @pytest.mark.asyncio
