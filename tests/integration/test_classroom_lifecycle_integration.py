@@ -7,9 +7,22 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import async_session_maker
+from app.models.assignment import Assignment
+from app.models.chat import ClassroomMessage
 from app.models.classroom import Classroom, ClassroomStudent
-from app.models.enums import OrgRole
+from app.models.enums import (
+    AssignmentType,
+    OrgRole,
+    ReleasePolicyType,
+    SubmissionStatus,
+)
 from app.models.organization import Organization, OrganizationMember
+from app.models.submission import (
+    Submission,
+    SubmissionAiInsight,
+    SubmissionEvaluation,
+)
 from app.models.user import User
 from app.services.storage_service import storage_service
 
@@ -30,6 +43,12 @@ async def test_full_classroom_lifecycle(
     teacher = User(
         id=teacher_id, email="teacher_lifecycle@test.com", full_name="Prof. Silva"
     )
+    replacement_teacher_id = uuid.uuid4()
+    replacement_teacher = User(
+        id=replacement_teacher_id,
+        email="replacement_teacher_lifecycle@test.com",
+        full_name="Prof. Ada",
+    )
     student = User(
         id=student_id, email="student_lifecycle@test.com", full_name="Aluno João"
     )
@@ -40,7 +59,7 @@ async def test_full_classroom_lifecycle(
         slug="tech-academy",
         owner_id=owner_id,
     )
-    db_session.add_all([owner, teacher, student, org])
+    db_session.add_all([owner, teacher, replacement_teacher, student, org])
     await db_session.flush()
 
     members = [
@@ -51,6 +70,11 @@ async def test_full_classroom_lifecycle(
             organization_id=org.id, user_id=teacher_id, role=OrgRole.TEACHER
         ),
         OrganizationMember(
+            organization_id=org.id,
+            user_id=replacement_teacher_id,
+            role=OrgRole.TEACHER,
+        ),
+        OrganizationMember(
             organization_id=org.id, user_id=student_id, role=OrgRole.STUDENT
         ),
     ]
@@ -59,6 +83,7 @@ async def test_full_classroom_lifecycle(
 
     owner_token = create_access_token(user_id=owner_id)
     teacher_token = create_access_token(user_id=teacher_id)
+    replacement_teacher_token = create_access_token(user_id=replacement_teacher_id)
     student_token = create_access_token(user_id=student_id)
 
     # 2. Professor cria sala de aula
@@ -150,12 +175,101 @@ async def test_full_classroom_lifecycle(
     assert patch_res.status_code == 200
     assert patch_res.json()["name"] == "Programação Web Avançada"
 
-    del_att_res = await async_client.delete(
-        f"/api/v1/classrooms/{classroom_id}/attachments/ementa.pdf",
+    # Registros pedagógicos e mensagens existentes devem sobreviver à transferência.
+    assignment = Assignment(
+        classroom_id=uuid.UUID(classroom_id),
+        title="Atividade preservada",
+        description="Conteúdo existente",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        config={"language": "python"},
+    )
+    db_session.add(assignment)
+    await db_session.flush()
+    submission = Submission(
+        assignment_id=assignment.id,
+        student_id=student_id,
+        content={"source_code": "print('ok')"},
+        status=SubmissionStatus.PUBLISHED,
+    )
+    db_session.add(submission)
+    await db_session.flush()
+    insight = SubmissionAiInsight(
+        submission_id=submission.id,
+        status="completed",
+        reasoning="Insight existente",
+    )
+    evaluation = SubmissionEvaluation(
+        submission_id=submission.id,
+        grade=9,
+        general_feedback="Avaliação existente",
+    )
+    message = ClassroomMessage(
+        classroom_id=uuid.UUID(classroom_id),
+        sender_id=teacher_id,
+        content="Mensagem existente",
+    )
+    db_session.add_all([insight, evaluation, message])
+    await db_session.commit()
+
+    # 8. Coordenação troca o responsável preservando matrícula e acesso pedagógico
+    transfer_res = await async_client.put(
+        f"/api/v1/classrooms/{classroom_id}/teacher",
+        json={"teacher_id": str(replacement_teacher_id)},
         headers={"Authorization": f"Bearer {owner_token}"},
     )
-    assert del_att_res.status_code == 204
+    assert transfer_res.status_code == 200
+    assert transfer_res.json()["teacher_id"] == str(replacement_teacher_id)
+    async with async_session_maker() as verify_session:
+        persisted_classroom = await verify_session.get(
+            Classroom, uuid.UUID(classroom_id)
+        )
+        assert persisted_classroom is not None
+        assert persisted_classroom.teacher_id == replacement_teacher_id
+        assert persisted_classroom.name == "Programação Web Avançada"
+        persisted_enrollment = await verify_session.scalar(
+            select(ClassroomStudent).where(
+                ClassroomStudent.classroom_id == uuid.UUID(classroom_id),
+                ClassroomStudent.student_id == student_id,
+            )
+        )
+        assert persisted_enrollment is not None
+        persisted_assignment = await verify_session.get(Assignment, assignment.id)
+        assert persisted_assignment is not None
+        assert persisted_assignment.title == "Atividade preservada"
+        persisted_submission = await verify_session.get(Submission, submission.id)
+        assert persisted_submission is not None
+        assert persisted_submission.content == {"source_code": "print('ok')"}
+        assert await verify_session.get(SubmissionAiInsight, insight.id) is not None
+        persisted_evaluation = await verify_session.get(
+            SubmissionEvaluation, evaluation.id
+        )
+        assert persisted_evaluation is not None
+        assert persisted_evaluation.grade == 9
+        persisted_message = await verify_session.get(ClassroomMessage, message.id)
+        assert persisted_message is not None
+        assert persisted_message.content == "Mensagem existente"
+    down_after_transfer = await async_client.get(
+        f"/api/v1/classrooms/{classroom_id}/attachments/ementa.pdf/download",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert down_after_transfer.status_code == 200
 
+    former_teacher_res = await async_client.patch(
+        f"/api/v1/classrooms/{classroom_id}",
+        json={"name": "Edição pelo docente anterior"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    )
+    assert former_teacher_res.status_code == 403
+    replacement_teacher_res = await async_client.patch(
+        f"/api/v1/classrooms/{classroom_id}",
+        json={"name": "Turma após transferência"},
+        headers={"Authorization": f"Bearer {replacement_teacher_token}"},
+    )
+    assert replacement_teacher_res.status_code == 200
+    assert replacement_teacher_res.json()["name"] == "Turma após transferência"
+
+    # 9. Owner remove a turma após verificar o ciclo de transferência
     del_class_res = await async_client.delete(
         f"/api/v1/classrooms/{classroom_id}",
         headers={"Authorization": f"Bearer {owner_token}"},

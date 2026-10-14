@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.core.exceptions import (
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     NotFoundException,
 )
 from app.models.classroom import Classroom, ClassroomStudent
@@ -213,22 +214,126 @@ class ClassroomService:
             total_students=total_students,
         )
 
+    async def _lock_classroom_actor(
+        self, classroom: Classroom, actor_id: UUID, db: AsyncSession
+    ) -> tuple[Classroom, OrganizationMember]:
+        """Recarrega sala e vínculo institucional sob lock na organização autorizada."""
+        classroom_stmt = (
+            select(Classroom)
+            .where(
+                Classroom.id == classroom.id,
+                Classroom.organization_id == classroom.organization_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        locked_classroom = (await db.execute(classroom_stmt)).scalar_one_or_none()
+        if locked_classroom is None:
+            raise NotFoundException("Sala de aula não encontrada.")
+
+        actor_stmt = (
+            select(OrganizationMember)
+            .where(
+                OrganizationMember.organization_id == locked_classroom.organization_id,
+                OrganizationMember.user_id == actor_id,
+                OrganizationMember.is_active.is_(True),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        actor = (await db.execute(actor_stmt)).scalar_one_or_none()
+        if actor is None:
+            raise ForbiddenException("O membro ativo não foi encontrado.")
+        return locked_classroom, actor
+
     async def update_classroom(
         self,
         classroom: Classroom,
         name: str | None,
         description: str | None,
+        actor_id: UUID,
         db: AsyncSession,
     ) -> Classroom:
-        """Atualiza campos opcionais da sala de aula."""
-        if name is not None:
-            classroom.name = name
-        if description is not None:
-            classroom.description = description
+        """Atualiza nome e descrição com revalidação da permissão de edição."""
+        try:
+            locked_classroom, actor = await self._lock_classroom_actor(
+                classroom, actor_id, db
+            )
+            if actor.role not in (OrgRole.OWNER, OrgRole.ADMIN) and (
+                locked_classroom.teacher_id != actor_id
+            ):
+                raise ForbiddenException(
+                    "Apenas o professor responsável, administradores ou owner podem alterar esta sala."
+                )
+            if name is not None:
+                locked_classroom.name = name
+            if description is not None:
+                locked_classroom.description = description
 
-        await db.commit()
-        await db.refresh(classroom)
-        return classroom
+            await db.commit()
+            await db.refresh(locked_classroom)
+            return locked_classroom
+        except IntegrityError as exc:
+            await db.rollback()
+            raise ConflictException(
+                "Conflito de integridade ao atualizar a sala de aula."
+            ) from exc
+        except Exception:
+            await db.rollback()
+            raise
+
+    async def transfer_teacher(
+        self,
+        classroom: Classroom,
+        teacher_id: UUID,
+        actor_id: UUID,
+        db: AsyncSession,
+    ) -> Classroom:
+        """Transfere a docência para professor ativo, preservando os dados da sala."""
+        try:
+            locked_classroom, actor = await self._lock_classroom_actor(
+                classroom, actor_id, db
+            )
+            if actor.role not in (OrgRole.OWNER, OrgRole.ADMIN):
+                raise ForbiddenException(
+                    "Apenas Owner ou Admin pode alterar o professor responsável."
+                )
+            teacher_stmt = (
+                select(OrganizationMember)
+                .where(
+                    OrganizationMember.organization_id
+                    == locked_classroom.organization_id,
+                    OrganizationMember.user_id == teacher_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            target_teacher = (await db.execute(teacher_stmt)).scalar_one_or_none()
+            if target_teacher is None:
+                raise NotFoundException(
+                    "O professor indicado não pertence a esta organização."
+                )
+            if not target_teacher.is_active:
+                raise BadRequestException(
+                    "O professor indicado está inativo nesta organização."
+                )
+            if target_teacher.role != OrgRole.TEACHER:
+                raise BadRequestException(
+                    "O responsável indicado deve possuir papel de professor."
+                )
+            locked_classroom.teacher_id = teacher_id
+
+            await db.commit()
+            await db.refresh(locked_classroom)
+            return locked_classroom
+        except IntegrityError as exc:
+            await db.rollback()
+            raise ConflictException(
+                "Conflito de integridade ao transferir o professor responsável."
+            ) from exc
+        except Exception:
+            await db.rollback()
+            raise
 
     async def delete_classroom(self, classroom: Classroom, db: AsyncSession) -> None:
         """Remove a sala de aula e dados associados via cascata relacional."""

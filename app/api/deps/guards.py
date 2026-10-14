@@ -64,12 +64,17 @@ def require_classroom_permission(
     can_manage_attachments: bool = False,
     can_view: bool = True,
     must_be_teacher: bool = False,
+    must_be_admin_or_owner: bool = False,
 ) -> Callable[..., ClassroomContext]:
     """Guard declarativo para autorização no contexto de sala de aula."""
 
     def dependency(
         context: Annotated[ClassroomContext, Depends(get_classroom_context)],
     ) -> ClassroomContext:
+        if must_be_admin_or_owner and not (context.is_owner or context.is_admin):
+            raise ForbiddenException(
+                "Acesso negado: apenas administradores ou owner podem transferir a docência da sala."
+            )
         if must_be_teacher and not context.is_teacher_of_class:
             raise ForbiddenException(
                 "Acesso negado: apenas o professor responsável pela sala pode cadastrar atividades."

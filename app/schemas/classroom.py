@@ -17,7 +17,13 @@ class ClassroomUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=3, max_length=255)
     description: str | None = None
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+
+class ClassroomTeacherUpdateRequest(BaseModel):
+    teacher_id: UUID
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ClassroomTeacherResponse(BaseModel):

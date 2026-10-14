@@ -328,3 +328,26 @@ class TestSubmissionPermissionGuards:
         checker = require_submission_permission(can_view_ai_insights=True)
         with pytest.raises(ForbiddenException):
             checker(ctx)
+
+
+@pytest.mark.parametrize("role", list(OrgRole))
+def test_classroom_management_guard_when_role_is_checked_should_only_allow_owner_admin(
+    role: OrgRole,
+):
+    org_id = uuid.uuid4()
+    member = _create_mock_member(role, org_id)
+    classroom = _create_mock_classroom(member.user_id, org_id)
+    context = ClassroomContext(
+        classroom=classroom,
+        current_member=member,
+        is_owner=role == OrgRole.OWNER,
+        is_admin=role == OrgRole.ADMIN,
+        is_teacher_of_class=True,
+        is_enrolled_student=False,
+    )
+    guard = require_classroom_permission(must_be_admin_or_owner=True)
+    if role in (OrgRole.OWNER, OrgRole.ADMIN):
+        assert guard(context) is context
+    else:
+        with pytest.raises(ForbiddenException):
+            guard(context)

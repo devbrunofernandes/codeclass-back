@@ -3,8 +3,10 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import async_session_maker
 from app.core.exceptions import (
     BadRequestException,
+    ForbiddenException,
     NotFoundException,
 )
 from app.models.classroom import Classroom
@@ -118,3 +120,121 @@ async def test_classroom_service_enroll_non_student_or_other_org(
         )
     assert exc.value.status_code == 400
     assert "papel de estudante" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_classroom_service_rechecks_locked_state_after_concurrent_transfer(
+    db_session: AsyncSession,
+) -> None:
+    org_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    former_teacher_id = uuid.uuid4()
+    replacement_teacher_id = uuid.uuid4()
+    classroom_id = uuid.uuid4()
+    owner = User(id=owner_id, email="owner-race@test.com", full_name="Owner")
+    former_teacher = User(
+        id=former_teacher_id,
+        email="former-race@test.com",
+        full_name="Former Teacher",
+    )
+    replacement_teacher = User(
+        id=replacement_teacher_id,
+        email="replacement-race@test.com",
+        full_name="Replacement Teacher",
+    )
+    org = Organization(
+        id=org_id,
+        name="Race Org",
+        slug=f"race-{org_id.hex[:8]}",
+        owner_id=owner_id,
+    )
+    former_member = OrganizationMember(
+        organization_id=org_id,
+        user_id=former_teacher_id,
+        role=OrgRole.TEACHER,
+    )
+    replacement_member = OrganizationMember(
+        organization_id=org_id,
+        user_id=replacement_teacher_id,
+        role=OrgRole.TEACHER,
+    )
+    owner_member = OrganizationMember(
+        organization_id=org_id,
+        user_id=owner_id,
+        role=OrgRole.OWNER,
+    )
+    classroom = Classroom(
+        id=classroom_id,
+        organization_id=org_id,
+        teacher_id=former_teacher_id,
+        name="Race Classroom",
+    )
+    db_session.add_all(
+        [
+            owner,
+            former_teacher,
+            replacement_teacher,
+            org,
+            former_member,
+            replacement_member,
+            owner_member,
+            classroom,
+        ]
+    )
+    await db_session.commit()
+
+    stale_classroom = await db_session.get(Classroom, classroom_id)
+    assert stale_classroom is not None
+    async with async_session_maker() as concurrent_session:
+        concurrent_classroom = await concurrent_session.get(Classroom, classroom_id)
+        assert concurrent_classroom is not None
+        concurrent_classroom.teacher_id = replacement_teacher_id
+        await concurrent_session.commit()
+
+    with pytest.raises(ForbiddenException):
+        await classroom_service.update_classroom(
+            classroom=stale_classroom,
+            name="Unauthorized stale update",
+            description=None,
+            actor_id=former_teacher_id,
+            db=db_session,
+        )
+
+    async with async_session_maker() as verify_session:
+        persisted = await verify_session.get(Classroom, classroom_id)
+        assert persisted is not None
+        assert persisted.teacher_id == replacement_teacher_id
+        assert persisted.name == "Race Classroom"
+
+
+@pytest.mark.asyncio
+async def test_transfer_teacher_when_actor_is_demoted_concurrently_should_reject_stale_authority(
+    db_session: AsyncSession,
+    tenant,
+    classroom: Classroom,
+) -> None:
+    organization_id = tenant.org.id
+    classroom_id = classroom.id
+    actor_id = tenant.admin.user.id
+    teacher_id = tenant.other_teacher.user.id
+    original_teacher_id = classroom.teacher_id
+    assert tenant.admin.member.role == OrgRole.ADMIN
+
+    async with async_session_maker() as concurrent_session:
+        actor = await concurrent_session.get(
+            OrganizationMember, (organization_id, actor_id)
+        )
+        assert actor is not None
+        actor.role = OrgRole.TEACHER
+        await concurrent_session.commit()
+    assert tenant.admin.member.role == OrgRole.ADMIN
+
+    with pytest.raises(ForbiddenException):
+        await classroom_service.transfer_teacher(
+            classroom, teacher_id, actor_id, db_session
+        )
+
+    async with async_session_maker() as verify_session:
+        persisted = await verify_session.get(Classroom, classroom_id)
+        assert persisted is not None
+        assert persisted.teacher_id == original_teacher_id

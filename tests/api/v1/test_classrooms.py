@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.classroom import Classroom, ClassroomStudent
@@ -342,3 +343,353 @@ async def test_classroom_edge_cases_and_not_found_should_return_404(
         headers=tenant.teacher.auth_headers,
     )
     assert res_unenroll_cls_nf.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_owner_assigns_active_teacher_should_preserve_classroom(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    db_session.add(
+        ClassroomStudent(
+            classroom_id=classroom.id,
+            student_id=tenant.student.user.id,
+        )
+    )
+    await db_session.commit()
+
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == classroom.name
+    assert response.json()["teacher_id"] == str(tenant.other_teacher.user.id)
+    enrollment = await db_session.scalar(
+        select(ClassroomStudent).where(
+            ClassroomStudent.classroom_id == classroom.id,
+            ClassroomStudent.student_id == tenant.student.user.id,
+        )
+    )
+    assert enrollment is not None
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_admin_assigns_teacher_should_succeed(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.admin.auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["teacher_id"] == str(tenant.other_teacher.user.id)
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_teacher_requests_transfer_should_return_403(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+
+    assert response.status_code == 403
+    self_assignment_response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.teacher.user.id)},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert self_assignment_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_target_is_student_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.student.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 400
+    await db_session.refresh(classroom)
+    assert classroom.name == "Turma de Algoritmos e Estruturas de Dados"
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_target_is_from_another_org_should_return_404(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    create_tenant,
+):
+    other_tenant = await create_tenant("Outra organização")
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(other_tenant.teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_target_is_inactive_should_return_400(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    tenant.other_teacher.member.is_active = False
+    await db_session.commit()
+
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_null_should_return_422(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": None},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_unauthenticated_should_return_401(
+    async_client: AsyncClient, classroom: Classroom, tenant: TenantContext
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_assigning_current_teacher_should_be_idempotent(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["teacher_id"] == str(tenant.teacher.user.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actor", ["owner", "teacher"])
+async def test_update_classroom_when_teacher_id_is_sent_should_return_422_without_changes(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+    actor: str,
+):
+    original_name = classroom.name
+    original_teacher_id = classroom.teacher_id
+    response = await async_client.patch(
+        f"/api/v1/classrooms/{classroom.id}",
+        json={
+            "name": "Tentativa antiga",
+            "teacher_id": str(tenant.other_teacher.user.id),
+        },
+        headers=getattr(tenant, actor).auth_headers,
+    )
+    assert response.status_code == 422
+    await db_session.refresh(classroom)
+    assert classroom.teacher_id == original_teacher_id
+    assert classroom.name == original_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload", [{}, {"teacher_id": "invalid"}, {"teacher_id": None}]
+)
+async def test_transfer_classroom_teacher_when_payload_is_invalid_should_return_422(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom, payload
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json=payload,
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_name_is_sent_should_return_422(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    original_name = classroom.name
+    original_teacher_id = classroom.teacher_id
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"name": "Nome extra", "teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 422
+    await db_session.refresh(classroom)
+    assert classroom.name == original_name
+    assert classroom.teacher_id == original_teacher_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actor", ["student", "other_student", "other_teacher"])
+async def test_transfer_classroom_teacher_when_actor_is_not_management_should_return_403(
+    async_client: AsyncClient, tenant: TenantContext, classroom: Classroom, actor: str
+):
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=getattr(tenant, actor).auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_classroom_is_from_other_tenant_should_return_403(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    create_tenant,
+):
+    other_tenant = await create_tenant()
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(other_tenant.teacher.user.id)},
+        headers=other_tenant.owner.auth_headers,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource", ["classroom", "teacher"])
+async def test_transfer_classroom_teacher_when_resource_is_missing_should_return_404(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    resource: str,
+):
+    classroom_id = uuid.uuid4() if resource == "classroom" else classroom.id
+    teacher_id = uuid.uuid4() if resource == "teacher" else tenant.other_teacher.user.id
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom_id}/teacher",
+        json={"teacher_id": str(teacher_id)},
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_former_teacher_is_inactive_should_succeed(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    tenant.teacher.member.is_active = False
+    await db_session.commit()
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["teacher_id"] == str(tenant.other_teacher.user.id)
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_commit_conflicts_should_return_409_without_changes(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.exc import IntegrityError
+
+    original_teacher_id = classroom.teacher_id
+    monkeypatch.setattr(
+        AsyncSession,
+        "commit",
+        AsyncMock(side_effect=IntegrityError("UPDATE", {}, Exception("conflict"))),
+    )
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 409
+    await db_session.refresh(classroom)
+    assert classroom.teacher_id == original_teacher_id
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_token_is_expired_should_return_401(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    create_access_token,
+):
+    from datetime import timedelta
+
+    token = create_access_token(
+        tenant.owner.user.id, expires_delta=timedelta(minutes=-1)
+    )
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_transfer_classroom_teacher_when_user_is_revoked_should_return_401(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom: Classroom,
+    db_session: AsyncSession,
+):
+    headers = tenant.admin.auth_headers
+    await db_session.delete(tenant.admin.user)
+    await db_session.commit()
+    response = await async_client.put(
+        f"/api/v1/classrooms/{classroom.id}/teacher",
+        json={"teacher_id": str(tenant.other_teacher.user.id)},
+        headers=headers,
+    )
+    assert response.status_code == 401

@@ -18,6 +18,7 @@ from app.schemas.classroom import (
     ClassroomMyClassResponse,
     ClassroomResponse,
     ClassroomStudentMemberResponse,
+    ClassroomTeacherUpdateRequest,
     ClassroomUpdateRequest,
     EnrollStudentRequest,
 )
@@ -69,7 +70,33 @@ async def update_classroom(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ClassroomResponse:
     updated = await classroom_service.update_classroom(
-        context.classroom, request.name, request.description, db
+        context.classroom,
+        request.name,
+        request.description,
+        context.current_member.user_id,
+        db,
+    )
+    return ClassroomResponse.model_validate(updated)
+
+
+@router.put(
+    "/{classroom_id}/teacher",
+    response_model=ClassroomResponse,
+    summary="Transfere o professor responsável pela sala de aula",
+)
+async def transfer_classroom_teacher(
+    request: ClassroomTeacherUpdateRequest,
+    context: Annotated[
+        ClassroomContext,
+        Depends(require_classroom_permission(must_be_admin_or_owner=True)),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ClassroomResponse:
+    updated = await classroom_service.transfer_teacher(
+        context.classroom,
+        request.teacher_id,
+        context.current_member.user_id,
+        db,
     )
     return ClassroomResponse.model_validate(updated)
 
