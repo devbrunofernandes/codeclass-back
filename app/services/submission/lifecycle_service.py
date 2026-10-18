@@ -209,6 +209,8 @@ class SubmissionLifecycleService:
                 existing_sub.ai_insight.strengths = []
                 existing_sub.ai_insight.improvements = []
                 existing_sub.ai_insight.item_insights = None
+                existing_sub.ai_insight.feedback_positive = None
+                existing_sub.ai_insight.feedback_details = None
             elif existing_sub:
                 existing_sub.ai_insight = SubmissionAiInsight(
                     submission_id=existing_sub.id,

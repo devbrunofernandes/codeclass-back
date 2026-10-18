@@ -23,6 +23,8 @@ from app.schemas.evaluation import (
     SubmissionEvaluationResponse,
 )
 from app.schemas.submission import (
+    SubmissionAiFeedbackRequest,
+    SubmissionAiInsightResponse,
     SubmissionCreateRequest,
     SubmissionDetailStudentResponse,
     SubmissionDetailTeacherResponse,
@@ -40,6 +42,25 @@ from app.services.submission import (
 )
 
 router = APIRouter()
+
+
+@router.put(
+    "/submissions/{submission_id}/ai-feedback",
+    response_model=SubmissionAiInsightResponse,
+    summary="Registra o feedback do professor sobre o parecer da IA",
+)
+async def save_ai_feedback(
+    request: SubmissionAiFeedbackRequest,
+    context: Annotated[
+        SubmissionContext,
+        Depends(require_submission_permission(can_evaluate=True)),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SubmissionAiInsightResponse:
+    insight = await submission_evaluation_service.save_ai_feedback(
+        context.submission, request, db
+    )
+    return SubmissionAiInsightResponse.model_validate(insight)
 
 
 @router.post(

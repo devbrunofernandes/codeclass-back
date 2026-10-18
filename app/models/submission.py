@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -182,6 +183,8 @@ class SubmissionAiInsight(Base):
         nullable=True,
         default=None,
     )
+    feedback_positive: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    feedback_details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

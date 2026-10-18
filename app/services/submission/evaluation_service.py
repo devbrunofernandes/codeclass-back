@@ -12,13 +12,47 @@ from app.core.exceptions import (
 from app.models.enums import SubmissionStatus
 from app.models.submission import (
     Submission,
+    SubmissionAiInsight,
     SubmissionEvaluation,
 )
 from app.schemas.evaluation import SubmissionEvaluationRequest
+from app.schemas.submission import SubmissionAiFeedbackRequest
 
 
 class SubmissionEvaluationService:
     """Serviço de avaliação docente, pareceres autorais e publicação de notas."""
+
+    async def save_ai_feedback(
+        self,
+        submission: Submission,
+        request: SubmissionAiFeedbackRequest,
+        db: AsyncSession,
+    ) -> SubmissionAiInsight:
+        current = await db.scalar(
+            select(Submission)
+            .where(Submission.id == submission.id)
+            .with_for_update(of=Submission)
+            .execution_options(populate_existing=True)
+        )
+        if current is None:
+            raise NotFoundException("Submissão não encontrada.")
+        insight = await db.scalar(
+            select(SubmissionAiInsight)
+            .where(SubmissionAiInsight.submission_id == current.id)
+            .execution_options(populate_existing=True)
+        )
+        if insight is None:
+            raise NotFoundException("Parecer de IA não encontrado.")
+        if (
+            current.status in (SubmissionStatus.PENDING, SubmissionStatus.DRAFT)
+            or insight.status != "completed"
+        ):
+            raise BadRequestException("O parecer da IA ainda não está disponível.")
+        insight.feedback_positive = request.feedback_positive
+        insight.feedback_details = request.feedback_details
+        await db.commit()
+        await db.refresh(insight)
+        return insight
 
     async def evaluate_submission(
         self,

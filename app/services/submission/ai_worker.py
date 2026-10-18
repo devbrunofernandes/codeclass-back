@@ -203,6 +203,8 @@ class SubmissionAiWorker:
             sub.ai_insight.strengths = []
             sub.ai_insight.improvements = []
             sub.ai_insight.item_insights = None
+            sub.ai_insight.feedback_positive = None
+            sub.ai_insight.feedback_details = None
         else:
             sub.ai_insight = SubmissionAiInsight(
                 submission_id=sub.id,

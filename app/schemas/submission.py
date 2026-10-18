@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator
 
 from app.models.enums import AssignmentType, SubmissionStatus
 from app.schemas.evaluation import SubmissionEvaluationResponse
@@ -125,6 +125,13 @@ class AiInsightResult(BaseModel):
     item_insights: list[AiItemInsightSchema] | None = None
 
 
+class SubmissionAiFeedbackRequest(BaseModel):
+    feedback_positive: StrictBool | None
+    feedback_details: str | None = Field(max_length=10000)
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+
 class SubmissionAiInsightResponse(BaseModel):
     id: UUID
     submission_id: UUID
@@ -136,6 +143,8 @@ class SubmissionAiInsightResponse(BaseModel):
     improvements: list[str] = Field(default_factory=list)
     item_insights: list[dict[str, Any]] | None = None
     error_message: str | None = None
+    feedback_positive: bool | None = None
+    feedback_details: str | None = None
     created_at: datetime
     updated_at: datetime
 
