@@ -163,3 +163,40 @@ A seleção dos testes live conhece o serviço (`ai`, `runner`, `storage`, `auth
 `tests/fixtures/live.py`. O Chat resolve o broker pela fábrica da
 aplicação; a integração específica de LISTEN/NOTIFY permanece na suíte dos
 provedores.
+
+## Compatibilidade do índice do Supabase Storage local
+
+O upload real pode falhar com HTTP 500 e SQLSTATE `42P10` se a instalação local
+mantiver `storage.idx_objects_current_version` sem `COLLATE "C"`. O Storage usa
+essa collation em seu `ON CONFLICT`, conforme a migração interna 0066.
+
+O reparo está em `supabase/seed.sql`: cria o índice compatível antes de substituir
+o antigo, preserva o nome esperado pelo Storage e executa tudo em uma transação.
+Se o índice já estiver correto, ele não é reconstruído. Definições inesperadas
+interrompem a operação para evitar sobrescrever contratos de outras versões.
+O reparo não altera registros ou arquivos, mas bloqueia escritas na tabela durante
+a reconstrução do índice.
+
+Na primeira correção, use uma conexão administrativa **local** com permissão
+para manter tanto as tabelas públicas do seed quanto `storage.objects`.
+O papel `postgres` do Supabase local pode não ter permissão para reconstruir
+índices pertencentes a `supabase_storage_admin`. Configure
+`STORAGE_REPAIR_DB_URL` com uma conexão administrativa para o banco local e aplique
+pelo Supabase CLI a partir de `codeclass-back/`:
+
+```bash
+npx supabase db query --db-url "$STORAGE_REPAIR_DB_URL" -f supabase/seed.sql
+```
+
+Depois da correção, o comando local padrão pode ser repetido normalmente, sem
+reconstruir o índice ou exigir novas permissões:
+
+```bash
+npx supabase db query --local -f supabase/seed.sql
+uv run pytest tests/integration/providers/test_supabase_storage_schema_integration.py -q
+make test-live LIVE_SERVICE=storage
+```
+
+O teste de schema usa `EXPLAIN` para conferir a inferência do índice pelo
+`ON CONFLICT` sem inserir objetos. A jornada live verifica o upload, a listagem,
+o download com conteúdo idêntico e a exclusão reais.
