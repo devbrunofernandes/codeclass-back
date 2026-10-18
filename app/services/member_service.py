@@ -24,6 +24,7 @@ from app.schemas.organization import (
     OrganizationMemberCreate,
     OrganizationMemberResponse,
 )
+from app.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +139,13 @@ class MemberService:
         stmt = stmt.offset(offset).limit(limit)
         result = await db.execute(stmt)
         members = result.scalars().all()
+        photos = await storage_service.get_profile_photo_fields(
+            org_id, {m.user_id: m.user.profile_photo_path for m in members}
+        )
 
         return [
             OrganizationMemberResponse(
+                **photos[m.user_id].model_dump(),
                 organization_id=m.organization_id,
                 user_id=m.user.id,
                 email=m.user.email,
@@ -199,7 +204,12 @@ class MemberService:
         await db.commit()
         await db.refresh(target_member)
 
+        photos = await storage_service.get_profile_photo_fields(
+            org_id, {target_member.user_id: target_member.user.profile_photo_path}
+        )
+
         return OrganizationMemberResponse(
+            **photos[target_member.user_id].model_dump(),
             organization_id=target_member.organization_id,
             user_id=target_member.user.id,
             email=target_member.user.email,
@@ -251,7 +261,12 @@ class MemberService:
         await db.commit()
         await db.refresh(target_member)
 
+        photos = await storage_service.get_profile_photo_fields(
+            org_id, {target_member.user_id: target_member.user.profile_photo_path}
+        )
+
         return OrganizationMemberResponse(
+            **photos[target_member.user_id].model_dump(),
             organization_id=target_member.organization_id,
             user_id=target_member.user.id,
             email=target_member.user.email,

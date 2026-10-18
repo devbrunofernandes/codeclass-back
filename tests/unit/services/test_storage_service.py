@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import UploadFile
+from starlette.datastructures import Headers
 
 from app.core.exceptions import StorageError
 from app.infrastructure.storage.base import StorageProvider
@@ -215,3 +216,92 @@ async def test_delete_classroom_material(
         bucket=CLASSROOM_MATERIALS_BUCKET,
         path=f"{org_id}/{cls_id}/sub_aula1.pdf",
     )
+
+
+async def test_upload_profile_photo_when_valid_should_use_single_tenant_path(
+    storage_service, mock_storage_provider, profile_photo_bytes
+):
+    org, user = uuid.uuid4(), uuid.uuid4()
+    for name in ("a.png", "b.png"):
+        path = await storage_service.upload_profile_photo(
+            org,
+            user,
+            UploadFile(
+                io.BytesIO(profile_photo_bytes),
+                filename=name,
+                headers=Headers({"content-type": "image/png"}),
+            ),
+        )
+        assert path == f"{org}/{user}/profile.jpg"
+    assert mock_storage_provider.upload_file.await_count == 2
+    assert mock_storage_provider.upload_file.call_args.kwargs["bucket"] == "user-photos"
+
+
+@pytest.mark.parametrize(
+    "content,mime,status",
+    [
+        (b"", "image/png", 400),
+        (b"fake", "image/png", 400),
+        (b"<svg/>", "image/svg+xml", 400),
+        (b"x" * (5 * 1024 * 1024 + 1), "image/png", 413),
+    ],
+    ids=["empty", "corrupt", "svg", "oversized"],
+)
+async def test_upload_profile_photo_when_invalid_should_reject_before_storage(
+    storage_service, mock_storage_provider, content, mime, status
+):
+    with pytest.raises(StorageError) as error:
+        await storage_service.upload_profile_photo(
+            uuid.uuid4(),
+            uuid.uuid4(),
+            UploadFile(
+                io.BytesIO(content),
+                filename="photo",
+                headers=Headers({"content-type": mime}),
+            ),
+        )
+    assert error.value.status_code == status
+    mock_storage_provider.upload_file.assert_not_awaited()
+
+
+async def test_profile_photo_urls_when_multiple_users_should_sign_once(
+    storage_service, mock_storage_provider
+):
+    org, first, second, empty = (uuid.uuid4() for _ in range(4))
+    paths = {
+        first: f"{org}/{first}/profile.jpg",
+        second: f"{org}/{second}/profile.jpg",
+        empty: None,
+    }
+    result = await storage_service.get_profile_photo_fields(org, paths)
+    assert result[first].profile_photo_url == "https://storage.example.com/signed"
+    assert result[second].profile_photo_url_expires_at is not None
+    assert result[empty].profile_photo_url is None
+    assert all(
+        set(photo.model_dump()) == {"profile_photo_url", "profile_photo_url_expires_at"}
+        for photo in result.values()
+    )
+    mock_storage_provider.get_signed_urls.assert_awaited_once_with(
+        bucket="user-photos", paths=[paths[first], paths[second]], expires_in=3600
+    )
+
+
+async def test_profile_photo_urls_when_empty_or_foreign_should_not_sign(
+    storage_service, mock_storage_provider
+):
+    org, user = uuid.uuid4(), uuid.uuid4()
+    for path in (None, f"{uuid.uuid4()}/{user}/profile.jpg"):
+        result = await storage_service.get_profile_photo_fields(org, {user: path})
+        assert result[user].profile_photo_url is None
+    mock_storage_provider.get_signed_urls.assert_not_awaited()
+
+
+async def test_profile_photo_urls_when_provider_fails_should_preserve_profile(
+    storage_service, mock_storage_provider
+):
+    org, user = uuid.uuid4(), uuid.uuid4()
+    mock_storage_provider.get_signed_urls.side_effect = StorageError("Unavailable", 502)
+    result = await storage_service.get_profile_photo_fields(
+        org, {user: f"{org}/{user}/profile.jpg"}
+    )
+    assert result[user].profile_photo_url is None

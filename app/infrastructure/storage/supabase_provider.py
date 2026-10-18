@@ -44,6 +44,35 @@ class SupabaseStorageProvider(StorageProvider):
     def __init__(self, client: Client | None = None) -> None:
         self._client: Client | None = client
 
+    async def get_signed_urls(
+        self, bucket: str, paths: list[str], expires_in: int = 3600
+    ) -> dict[str, str | None]:
+        if not paths:
+            return {}
+        try:
+            results = await anyio.to_thread.run_sync(
+                lambda: (
+                    self._get_client()
+                    .storage.from_(bucket)
+                    .create_signed_urls(paths=paths, expires_in=expires_in)
+                )
+            )
+            urls: dict[str, str | None] = dict.fromkeys(paths)
+            seen: set[str] = set()
+            for item in results:
+                path = item.get("path")
+                if path not in urls or path in seen:
+                    raise StorageError("Resposta de assinatura em lote inválida.", 502)
+                seen.add(path)
+                raw_url = item.get("signedURL") or item.get("signedUrl")
+                if not item.get("error") and raw_url:
+                    urls[path] = str(raw_url)
+            return urls
+        except StorageError:
+            raise
+        except Exception as exc:
+            raise StorageError("Falha ao assinar URLs em lote.", 502) from exc
+
     def _get_client(self) -> Client:
         if self._client is None:
             if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:

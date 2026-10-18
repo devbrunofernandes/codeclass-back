@@ -39,3 +39,9 @@ class StorageProvider(ABC):
         expires_in: int = 3600,
     ) -> str:
         """Gera URL assinada temporária para download seguro diretamente do storage."""
+
+    @abstractmethod
+    async def get_signed_urls(
+        self, bucket: str, paths: list[str], expires_in: int = 3600
+    ) -> dict[str, str | None]:
+        """Assina o lote em uma chamada; erros individuais retornam URL nula."""

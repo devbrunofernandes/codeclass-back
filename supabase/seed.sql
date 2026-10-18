@@ -8,6 +8,11 @@ DECLARE
     max_file_size_bytes CONSTANT bigint := 30 * 1024 * 1024;
     current_index regclass := to_regclass('storage.idx_objects_current_version');
 BEGIN
+    INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    VALUES ('user-photos', 'user-photos', false, 5 * 1024 * 1024, ARRAY['image/jpeg'])
+    ON CONFLICT (id) DO UPDATE SET public = false,
+        file_size_limit = EXCLUDED.file_size_limit,
+        allowed_mime_types = EXCLUDED.allowed_mime_types;
     -- 1. Storage Bucket: Materiais da Sala de Aula (HLD RF23 - Limite de 30MB)
     INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
     VALUES (

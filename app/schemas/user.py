@@ -15,7 +15,14 @@ class UserCreate(UserBase):
     password: str = Field(min_length=6)
 
 
-class UserResponse(UserBase):
+class ProfilePhotoResponse(BaseModel):
+    """URL temporária e expiração, compartilhadas por perfis, upload e download."""
+
+    profile_photo_url: str | None = None
+    profile_photo_url_expires_at: datetime | None = None
+
+
+class UserResponse(UserBase, ProfilePhotoResponse):
     id: UUID
     created_at: datetime
 
@@ -46,7 +53,7 @@ class TokenResponse(BaseModel):
     organization_id: UUID
 
 
-class CurrentUserProfileResponse(BaseModel):
+class CurrentUserProfileResponse(ProfilePhotoResponse):
     id: UUID
     email: EmailStr
     full_name: str

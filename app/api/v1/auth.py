@@ -16,6 +16,7 @@ from app.schemas.user import (
     UserLoginRequest,
     UserResponse,
 )
+from app.services.storage_service import storage_service
 
 router = APIRouter()
 
@@ -54,11 +55,17 @@ async def login(
     if not member.is_active:
         raise ForbiddenException("Acesso de usuário desativado na organização.")
 
+    photos = await storage_service.get_profile_photo_fields(
+        member.organization_id, {user.id: user.profile_photo_path}
+    )
+    user_response = UserResponse.model_validate(user).model_copy(
+        update=photos[user.id].model_dump()
+    )
     return TokenResponse(
         access_token=auth_data["access_token"],
         refresh_token=auth_data.get("refresh_token"),
         token_type="bearer",
-        user=UserResponse.model_validate(user),
+        user=user_response,
         role=member.role,
         organization_id=member.organization_id,
     )

@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.enums import OrgRole
-from app.schemas.user import UserCreate
+from app.schemas.user import ProfilePhotoResponse, UserCreate
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 SlugType = Annotated[
@@ -42,7 +42,7 @@ class OrganizationMemberCreate(BaseModel):
     role: OrgRole
 
 
-class OrganizationMemberResponse(BaseModel):
+class OrganizationMemberResponse(ProfilePhotoResponse):
     organization_id: UUID
     user_id: UUID
     email: EmailStr

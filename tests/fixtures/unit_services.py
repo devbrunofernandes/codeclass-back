@@ -23,6 +23,11 @@ def mock_storage_provider() -> MagicMock:
     provider.get_signed_url = AsyncMock(
         return_value="https://storage.example.com/signed"
     )
+
+    async def sign_many(bucket, paths, expires_in=3600):
+        return {path: "https://storage.example.com/signed" for path in paths}
+
+    provider.get_signed_urls = AsyncMock(side_effect=sign_many)
     provider.list_files = AsyncMock(return_value=[])
     provider.delete_file = AsyncMock()
     return provider

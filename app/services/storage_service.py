@@ -1,19 +1,57 @@
+import io
 import logging
 import tempfile
+import warnings
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import anyio
 from fastapi import UploadFile
+from PIL import Image, UnidentifiedImageError
 
 from app.core.exceptions import StorageError
 from app.infrastructure.storage.base import StorageProvider
 from app.infrastructure.storage.factory import get_storage_provider
+from app.schemas.user import ProfilePhotoResponse
 
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB
 CLASSROOM_MATERIALS_BUCKET = "classroom-materials"
+USER_PHOTOS_BUCKET = "user-photos"
+MAX_PROFILE_PHOTO_SIZE = 5 * 1024 * 1024
+
+
+def _normalize_profile_photo(content: bytes, content_type: str | None) -> bytes:
+    formats = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}
+    if content_type not in formats or not content:
+        raise StorageError("Envie uma imagem JPEG, PNG ou WebP não vazia.", 400)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as image:
+                if (
+                    image.format != formats[content_type]
+                    or image.width * image.height > 16_000_000
+                ):
+                    raise StorageError(
+                        "Formato inválido ou imagem acima de 16 megapixels.", 400
+                    )
+                image.load()
+                image.thumbnail((1024, 1024))
+                output = io.BytesIO()
+                image.convert("RGB").save(output, format="JPEG", quality=85)
+                return output.getvalue()
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        raise StorageError("Imagem inválida ou corrompida.", 400) from exc
 
 
 class StorageService:
@@ -24,6 +62,62 @@ class StorageService:
 
     def __init__(self, provider: StorageProvider | None = None) -> None:
         self._provider = provider
+
+    async def upload_profile_photo(
+        self, organization_id: UUID, user_id: UUID, file: UploadFile
+    ) -> str:
+        content = await file.read(MAX_PROFILE_PHOTO_SIZE + 1)
+        if len(content) > MAX_PROFILE_PHOTO_SIZE:
+            raise StorageError("Foto excede o limite de 5MB.", 413)
+        normalized = await anyio.to_thread.run_sync(
+            _normalize_profile_photo, content, file.content_type
+        )
+        path = f"{organization_id}/{user_id}/profile.jpg"
+        await self.provider.upload_file(
+            bucket=USER_PHOTOS_BUCKET,
+            path=path,
+            file=io.BytesIO(normalized),
+            content_type="image/jpeg",
+        )
+        return path
+
+    async def get_profile_photo_download(self, path: str) -> ProfilePhotoResponse:
+        expires_at = datetime.now(UTC) + timedelta(seconds=3600)
+        url = await self.provider.get_signed_url(
+            bucket=USER_PHOTOS_BUCKET, path=path, expires_in=3600
+        )
+        return ProfilePhotoResponse(
+            profile_photo_url=url, profile_photo_url_expires_at=expires_at
+        )
+
+    async def get_profile_photo_fields(
+        self, organization_id: UUID, photos: dict[UUID, str | None]
+    ) -> dict[UUID, ProfilePhotoResponse]:
+        fields = {user_id: ProfilePhotoResponse() for user_id in photos}
+        paths = {
+            user_id: path
+            for user_id, path in photos.items()
+            if path == f"{organization_id}/{user_id}/profile.jpg"
+        }
+        if not paths:
+            return fields
+        expires_at = datetime.now(UTC) + timedelta(seconds=3600)
+        try:
+            urls = await self.provider.get_signed_urls(
+                bucket=USER_PHOTOS_BUCKET,
+                paths=[path for path in paths.values() if path is not None],
+                expires_in=3600,
+            )
+        except StorageError:
+            logger.warning("Fotos temporariamente indisponíveis na assinatura em lote.")
+            return fields
+        for user_id, path in paths.items():
+            url = urls.get(path) if path is not None else None
+            if url:
+                fields[user_id] = ProfilePhotoResponse(
+                    profile_photo_url=url, profile_photo_url_expires_at=expires_at
+                )
+        return fields
 
     @property
     def provider(self) -> StorageProvider:

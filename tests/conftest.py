@@ -8,6 +8,7 @@ pytest.register_assert_rewrite("tests.fixtures.integration")
 from tests.fixtures.tenants import TenantContext, TenantMember
 
 pytest_plugins = [
+    "tests.fixtures.profile_photos",
     "tests.fixtures.core",
     "tests.fixtures.providers",
     "tests.fixtures.live",

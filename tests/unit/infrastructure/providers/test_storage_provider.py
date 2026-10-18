@@ -14,6 +14,56 @@ from app.infrastructure.storage.supabase_provider import (
 pytestmark = pytest.mark.usefixtures("mocked_blocking_io")
 
 
+async def test_signed_urls_when_batch_should_use_one_sdk_call():
+    client = MagicMock()
+    bucket = client.storage.from_.return_value
+    bucket.create_signed_urls.return_value = [
+        {"path": "a.jpg", "signedURL": "https://storage/a", "error": None},
+        {"path": "b.jpg", "signedURL": "", "error": "not found"},
+    ]
+    provider = SupabaseStorageProvider(client=client)
+    urls = await provider.get_signed_urls("user-photos", ["a.jpg", "b.jpg"], 3600)
+    assert urls == {"a.jpg": "https://storage/a", "b.jpg": None}
+    bucket.create_signed_urls.assert_called_once_with(
+        paths=["a.jpg", "b.jpg"], expires_in=3600
+    )
+    bucket.create_signed_url.assert_not_called()
+
+
+async def test_signed_urls_when_empty_should_skip_sdk():
+    client = MagicMock()
+    assert await SupabaseStorageProvider(client=client).get_signed_urls("b", []) == {}
+    client.storage.from_.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [{"path": "foreign.jpg", "signedURL": "https://storage/foreign"}],
+        [{"path": "a.jpg"}, {"path": "a.jpg"}],
+        [{"signedURL": "https://storage/no-path"}],
+    ],
+)
+async def test_signed_urls_when_response_has_unknown_or_duplicate_path_should_reject(
+    items,
+):
+    client = MagicMock()
+    client.storage.from_.return_value.create_signed_urls.return_value = items
+    with pytest.raises(StorageError) as error:
+        await SupabaseStorageProvider(client=client).get_signed_urls("b", ["a.jpg"])
+    assert error.value.status_code == 502
+
+
+async def test_signed_urls_when_sdk_fails_should_raise_storage_error():
+    client = MagicMock()
+    client.storage.from_.return_value.create_signed_urls.side_effect = RuntimeError(
+        "timeout"
+    )
+    with pytest.raises(StorageError) as error:
+        await SupabaseStorageProvider(client=client).get_signed_urls("b", ["a.jpg"])
+    assert error.value.status_code == 502
+
+
 def test_get_storage_provider_default():
     provider = get_storage_provider()
     assert isinstance(provider, SupabaseStorageProvider)
