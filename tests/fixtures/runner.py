@@ -116,9 +116,22 @@ def mock_runner_provider() -> MockRunnerProvider:
 @pytest.fixture
 def override_runner_provider(
     mock_runner_provider: MockRunnerProvider,
-) -> AsyncGenerator[MockRunnerProvider]:
+    request: pytest.FixtureRequest,
+) -> AsyncGenerator[object]:
     """Sobrescreve o runner nos testes solicitantes e restaura o provedor anterior."""
     from app.services.runner_service import runner_service
+    from tests.fixtures.live import live_service
+
+    if live_service(request.node) == "runner":
+        from app.infrastructure.runner.factory import get_runner_provider
+
+        previous_provider = runner_service.provider
+        runner_service.provider = get_runner_provider()
+        try:
+            yield runner_service.provider
+        finally:
+            runner_service.provider = previous_provider
+        return
 
     previous_provider = runner_service.provider
     runner_service.provider = mock_runner_provider

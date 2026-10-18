@@ -9,17 +9,9 @@ from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, ReleasePolicyType
 
 if TYPE_CHECKING:
-    from app.infrastructure.auth.supabase_auth import AuthService
     from app.services.member_service import MemberService
     from app.services.organization_service import OrganizationService
     from app.services.storage_service import StorageService
-
-
-@pytest.fixture
-def auth_svc() -> AuthService:
-    from app.infrastructure.auth.supabase_auth import AuthService
-
-    return AuthService()
 
 
 @pytest.fixture

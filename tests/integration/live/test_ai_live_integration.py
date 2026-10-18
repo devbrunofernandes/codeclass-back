@@ -10,11 +10,7 @@ from app.models.submission import Submission
 from tests.conftest import TenantContext
 
 
-@pytest.mark.live
-@pytest.mark.skipif(
-    not settings.AI_API_KEY,
-    reason="AI_API_KEY não configurada no ambiente.",
-)
+@pytest.mark.live("ai")
 @pytest.mark.asyncio
 async def test_ai_live_real_network_inference_e2e(
     async_client: AsyncClient,
@@ -106,7 +102,9 @@ def two_sum(nums: list[int], target: int) -> list[int]:
     assert db_sub.ai_insight.status == "completed"
     assert db_sub.ai_insight.error_message is None
 
-    suggested_grade = float(db_sub.ai_insight.suggested_grade or 0.0)
+    assert db_sub.ai_insight.suggested_grade is not None
+    assert db_sub.ai_insight.max_grade == 10.0
+    suggested_grade = float(db_sub.ai_insight.suggested_grade)
     assert 0.0 <= suggested_grade <= 10.0
     assert len(db_sub.ai_insight.strengths) >= 1
     assert isinstance(db_sub.ai_insight.reasoning, str)

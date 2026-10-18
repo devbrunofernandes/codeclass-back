@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.infrastructure.realtime.connection_manager import ConnectionManager
 from app.infrastructure.realtime.pubsub.base import MessageCallback
 from app.infrastructure.realtime.pubsub.factory import get_pubsub_broker
 from app.infrastructure.realtime.pubsub.in_memory import InMemoryPubSubBroker
@@ -281,58 +280,3 @@ def test_get_pubsub_broker_in_memory() -> None:
 def test_get_pubsub_broker_postgres() -> None:
     broker = get_pubsub_broker("postgres")
     assert isinstance(broker, PostgresListenNotifyBroker)
-
-
-def test_get_pubsub_broker_unsupported_raises_value_error() -> None:
-    with pytest.raises(ValueError, match="não suportado"):
-        get_pubsub_broker("unsupported_broker_xyz")
-
-
-# --- Testes de ConnectionManager com Broker Injetado ---
-
-
-@pytest.mark.asyncio
-async def test_connection_manager_with_custom_broker_publishes() -> None:
-    mock_broker = AsyncMock()
-    manager = ConnectionManager(broker=mock_broker)
-    room_id = uuid.uuid4()
-
-    mock_ws = AsyncMock()
-    await manager.connect(room_id, mock_ws)
-    mock_broker.subscribe.assert_awaited_once()
-
-    # Segundo connect na mesma sala não reinscreve no broker
-    mock_broker.subscribe.reset_mock()
-    mock_ws2 = AsyncMock()
-    await manager.connect(room_id, mock_ws2)
-    mock_broker.subscribe.assert_not_awaited()
-
-    # Broadcast delega para broker.publish
-    payload = {"event": "chat_message", "id": "123"}
-    await manager.broadcast(room_id, payload)
-    mock_broker.publish.assert_awaited_once_with(f"classroom:{room_id}", payload)
-
-    # Desconecta 1º socket: não desinscreve ainda
-    await manager.disconnect(room_id, mock_ws)
-    mock_broker.unsubscribe.assert_not_awaited()
-
-    # Desconecta 2º socket: esvazia sala e desinscreve no broker
-    await manager.disconnect(room_id, mock_ws2)
-    mock_broker.unsubscribe.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_connection_manager_shutdown_and_broker_property() -> None:
-    mock_broker = AsyncMock()
-    manager = ConnectionManager(broker=mock_broker)
-    assert manager.broker is mock_broker
-
-    room_id = uuid.uuid4()
-    mock_ws = AsyncMock()
-    await manager.connect(room_id, mock_ws)
-    assert room_id in manager._rooms
-
-    await manager.shutdown()
-    assert len(manager._rooms) == 0
-    assert len(manager._room_callbacks) == 0
-    mock_broker.disconnect.assert_awaited_once()

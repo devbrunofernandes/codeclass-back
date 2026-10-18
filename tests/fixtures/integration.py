@@ -64,33 +64,36 @@ async def registered_org(async_client: AsyncClient) -> AsyncGenerator[OrgContext
     org_id = org_data["id"]
     owner_id = org_data["owner_id"]
 
-    # 2. Login do Owner no GoTrue real
-    login_res = await async_client.post(
-        "/api/v1/auth/login",
-        json={"email": owner_email, "password": owner_password},
-    )
-    assert login_res.status_code == 200, f"Falha no login do owner: {login_res.text}"
-    login_data = login_res.json()
-    access_token = login_data["access_token"]
-    refresh_token = login_data["refresh_token"]
-
-    context = OrgContext(
-        org_id=org_id,
-        org_slug=org_slug,
-        owner_id=owner_id,
-        owner_email=owner_email,
-        owner_password=owner_password,
-        owner_name=owner_name,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        auth_headers={"Authorization": f"Bearer {access_token}"},
-        created_user_ids=[owner_id],
-    )
-
+    created_user_ids = [owner_id]
     try:
+        # 2. Login do Owner no GoTrue real
+        login_res = await async_client.post(
+            "/api/v1/auth/login",
+            json={"email": owner_email, "password": owner_password},
+        )
+        assert login_res.status_code == 200, (
+            f"Falha no login do owner: {login_res.text}"
+        )
+        login_data = login_res.json()
+        access_token = login_data["access_token"]
+        refresh_token = login_data["refresh_token"]
+
+        context = OrgContext(
+            org_id=org_id,
+            org_slug=org_slug,
+            owner_id=owner_id,
+            owner_email=owner_email,
+            owner_password=owner_password,
+            owner_name=owner_name,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            auth_headers={"Authorization": f"Bearer {access_token}"},
+            created_user_ids=created_user_ids,
+        )
+
         yield context
     finally:
         # Limpeza de todos os usuários criados no Supabase Auth
-        for uid in context.created_user_ids:
+        for uid in created_user_ids:
             with contextlib.suppress(AuthError):
                 await auth_service.delete_auth_user(uid)

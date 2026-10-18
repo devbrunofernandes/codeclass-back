@@ -198,9 +198,11 @@ def mock_ai_service(
 ) -> AsyncMock | None:
     """Mock do AiService solicitado pelas suítes de API e integração.
 
-    Se o teste estiver anotado com @pytest.mark.live, o mock é desativado para permitir a conexão real.
+    Somente live("ai") desativa o mock para permitir a conexão real.
     """
-    if request.node.get_closest_marker("live"):
+    from tests.fixtures.live import live_service
+
+    if live_service(request.node) == "ai":
         return None
 
     mock_evaluate = AsyncMock()

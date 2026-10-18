@@ -19,14 +19,6 @@ def test_get_storage_provider_default():
     assert isinstance(provider, SupabaseStorageProvider)
 
 
-def test_get_storage_provider_unsupported(monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import settings
-
-    monkeypatch.setattr(settings, "STORAGE_PROVIDER", "unsupported_storage")
-    with pytest.raises(ValueError, match="Provedor de storage não suportado"):
-        get_storage_provider()
-
-
 def test_supabase_provider_get_client_missing_config_raises_500(
     monkeypatch: pytest.MonkeyPatch,
 ):

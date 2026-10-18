@@ -23,6 +23,7 @@ def test_network_when_unit_test_attempts_connection_should_fail() -> None:
     [
         ["tests/unit", "tests/api", "tests/integration"],
         ["tests/integration", "tests/api", "tests/unit"],
+        ["tests/unit/infrastructure/providers", "tests/integration/providers"],
     ],
 )
 def test_collection_when_suites_are_combined_should_preserve_fixture_scopes(

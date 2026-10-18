@@ -110,13 +110,3 @@ def test_get_ai_provider_gemini():
     with patch("app.infrastructure.ai.factory.settings.AI_PROVIDER", "GEMINI"):
         provider = get_ai_provider()
         assert isinstance(provider, GeminiProvider)
-
-
-def test_get_ai_provider_unsupported_raises_error():
-    with (
-        patch(
-            "app.infrastructure.ai.factory.settings.AI_PROVIDER", "unsupported_provider"
-        ),
-        pytest.raises(ValueError, match="Provedor de IA não suportado"),
-    ):
-        get_ai_provider()

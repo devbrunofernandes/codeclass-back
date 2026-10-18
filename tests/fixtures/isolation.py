@@ -43,6 +43,7 @@ class ScopeProbe:
         for item in session.items:
             parts = item.path.parts
             if "unit" in parts:
+                assert "forbid_network" in item.fixturenames, item.nodeid
                 assert "cleanup_database" not in item.fixturenames, item.nodeid
                 assert "db_session" not in item.fixturenames, item.nodeid
                 assert "mock_ai_service" not in item.fixturenames, item.nodeid

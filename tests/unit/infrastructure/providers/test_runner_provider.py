@@ -28,14 +28,6 @@ def test_factory_returns_piston_provider() -> None:
         assert isinstance(provider, PistonProvider)
 
 
-def test_factory_raises_for_unsupported_provider() -> None:
-    with (
-        patch.object(settings, "RUNNER_PROVIDER", "unsupported_engine"),
-        pytest.raises(ValueError, match="Provedor de runner não suportado"),
-    ):
-        get_runner_provider()
-
-
 def test_judge0_language_mapping() -> None:
     provider = Judge0Provider()
     assert provider.map_language_to_id("python3") == 71

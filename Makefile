@@ -1,4 +1,4 @@
-.PHONY: start stop test reset
+.PHONY: start stop test test-unit test-providers test-integration test-live reset
 
 start:
 	@echo "--> Iniciando infraestrutura do Supabase..."
@@ -38,3 +38,18 @@ reset:
 	@echo "--> Resetando banco de dados local do Supabase..."
 	@npx supabase db reset --no-seed
 	@$(MAKE) start
+
+# LIVE_SERVICE vazio executa todos os serviços; exemplo: make test-live LIVE_SERVICE=runner
+LIVE_SERVICE ?=
+
+test-integration:
+	uv run pytest tests/integration -m 'not live' -v
+
+test-live:
+	uv run pytest $(if $(LIVE_SERVICE),tests/integration/live/test_$(LIVE_SERVICE)_live_integration.py,tests/integration/live) -m live -v
+
+test-unit:
+	uv run pytest tests/unit -v
+
+test-providers:
+	uv run pytest tests/unit/infrastructure/providers tests/integration/providers -v

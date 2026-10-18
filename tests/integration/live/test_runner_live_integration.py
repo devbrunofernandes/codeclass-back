@@ -1,23 +1,32 @@
 import pytest
 from httpx import AsyncClient
 
-from app.core.config import settings
 from app.models.enums import TestRunVerdict
 from tests.fixtures.tenants import TenantContext
 
 
-@pytest.mark.live
-@pytest.mark.skipif(
-    not (
-        settings.RUNNER_API_KEY
-        or (settings.RUNNER_PROVIDER == "piston" and settings.RUNNER_API_URL)
-    ),
-    reason="Runner remoto/local não configurado no ambiente para testes com rede real.",
+@pytest.mark.live("runner")
+@pytest.mark.parametrize(
+    ("code", "verdict", "passed"),
+    [
+        (
+            "import sys\na, b = map(int, sys.stdin.read().split())\nprint(a + b)",
+            TestRunVerdict.ACCEPTED,
+            1,
+        ),
+        ("print(0)", TestRunVerdict.WRONG_ANSWER, 0),
+        ("raise RuntimeError('live runner failure')", TestRunVerdict.RUNTIME_ERROR, 0),
+        ("while True: pass", TestRunVerdict.TIME_LIMIT_EXCEEDED, 0),
+    ],
+    ids=["accepted", "wrong-answer", "runtime-error", "timeout"],
 )
 @pytest.mark.asyncio
 async def test_runner_live_real_network_execution_e2e(
     async_client: AsyncClient,
     tenant: TenantContext,
+    code: str,
+    verdict: TestRunVerdict,
+    passed: int,
 ) -> None:
     """Teste de Integração Real (Live): submete código real para o executor remoto configurado em settings.RUNNER_API_URL,
 
@@ -61,18 +70,17 @@ async def test_runner_live_real_network_execution_e2e(
     assignment_id = assignment_resp.json()["id"]
 
     # 3. Aluno envia código Python real para o executor remoto
-    code = "import sys\na, b = map(int, sys.stdin.read().split())\nprint(a + b)"
     response = await async_client.post(
         f"/api/v1/assignments/{assignment_id}/test-run",
         json={"language": "python3", "code": code},
         headers=tenant.student.auth_headers,
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     data = response.json()
-    assert data["overall_status"] == TestRunVerdict.ACCEPTED
+    assert data["overall_status"] == verdict
     assert data["total_tests"] == 1
-    assert data["passed_tests"] == 1
-    assert data["results"][0]["status"] == TestRunVerdict.ACCEPTED
-    assert data["results"][0]["stdout"] is not None
-    assert "30" in data["results"][0]["stdout"]
+    assert data["passed_tests"] == passed
+    assert data["results"][0]["status"] == verdict
+    if verdict == TestRunVerdict.ACCEPTED:
+        assert "30" in data["results"][0]["stdout"]
