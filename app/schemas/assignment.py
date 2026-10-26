@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
 
@@ -24,11 +24,17 @@ class TestCaseConfig(BaseModel):
 
 
 class CodeAssignmentConfig(BaseModel):
+    statement: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     languages: list[LanguageConfig] = Field(min_length=1)
     time_limit_sec: float = Field(default=2.0, gt=0, le=60.0)
     memory_limit_mb: int = Field(default=128, gt=0, le=1024)
     rubric: str = Field(default="")
     test_cases: list[TestCaseConfig] = Field(default_factory=list)
+
+
+class CodeAssignmentResponseConfig(CodeAssignmentConfig):
+    # Tarefas anteriores à introdução do enunciado permanecem consultáveis.
+    statement: str = ""
 
 
 class ChoiceOptionConfig(BaseModel):
@@ -76,6 +82,7 @@ class QuestionnaireAssignmentConfig(BaseModel):
 
 
 class CodeAssignmentStudentConfig(BaseModel):
+    statement: str = ""
     languages: list[LanguageConfig]
     time_limit_sec: float
     memory_limit_mb: int
@@ -173,11 +180,20 @@ class AssignmentUpdateRequest(BaseModel):
     description: str | None = None
     release_policy: ReleasePolicyType | None = None
     deadline: datetime | None = None
-    config: (
-        CodeAssignmentConfig | QuestionnaireAssignmentConfig | dict[str, Any] | None
-    ) = None
+    config: CodeAssignmentConfig | QuestionnaireAssignmentConfig | None = None
 
     model_config = ConfigDict(str_strip_whitespace=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_config_shape(cls, data: Any) -> Any:
+        if isinstance(data, dict) and isinstance(data.get("config"), dict):
+            config = data["config"]
+            if "languages" in config and "questions" in config:
+                raise ValueError(
+                    "A configuração não pode misturar atividade de código e questionário."
+                )
+        return data
 
 
 # --- Modelos de Resposta ---
@@ -191,7 +207,9 @@ class AssignmentTeacherResponse(BaseModel):
     type: AssignmentType
     release_policy: ReleasePolicyType
     deadline: datetime | None
-    config: CodeAssignmentConfig | QuestionnaireAssignmentConfig | dict[str, Any]
+    config: (
+        CodeAssignmentResponseConfig | QuestionnaireAssignmentConfig | dict[str, Any]
+    )
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

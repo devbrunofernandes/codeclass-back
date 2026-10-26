@@ -5,6 +5,7 @@ from app.models.enums import AssignmentType, ReleasePolicyType
 from app.schemas.assignment import (
     AssignmentCreateRequest,
     AssignmentStudentResponse,
+    AssignmentUpdateRequest,
     ChoiceOptionConfig,
     ChoiceQuestionConfig,
     CodeAssignmentConfig,
@@ -15,9 +16,38 @@ from app.schemas.assignment import (
 )
 
 
+@pytest.mark.parametrize("statement", ["Soma", "Leia dois números.\nImprima a soma."])
+def test_code_config_when_statement_is_text_should_preserve_content(statement):
+    config = CodeAssignmentConfig(
+        statement=statement, languages=[LanguageConfig(name="python3")]
+    )
+    assert config.model_dump()["statement"] == statement
+
+
+@pytest.mark.parametrize("statement", [None, 123, [], {}, "", "   ", "\n\t"])
+@pytest.mark.parametrize(
+    "request_type", [AssignmentCreateRequest, AssignmentUpdateRequest]
+)
+def test_assignment_when_statement_is_invalid_should_reject(statement, request_type):
+    with pytest.raises(ValidationError):
+        request_type.model_validate(
+            {
+                "title": "Soma",
+                "type": "code",
+                "config": {"statement": statement, "languages": [{"name": "python3"}]},
+            }
+        )
+
+
+def test_code_config_when_statement_is_omitted_should_reject():
+    with pytest.raises(ValidationError):
+        CodeAssignmentConfig(languages=[LanguageConfig(name="python3")])
+
+
 def test_code_assignment_config_when_valid_should_instantiate():
     # Arrange & Act
     config = CodeAssignmentConfig(
+        statement="Implemente a solução.",
         languages=[
             LanguageConfig(name="python3", starter_code="def solucao():\n    pass\n")
         ],
@@ -41,6 +71,7 @@ def test_code_assignment_config_when_valid_should_instantiate():
 def test_code_assignment_config_when_languages_empty_should_fail():
     with pytest.raises(ValidationError):
         CodeAssignmentConfig(
+            statement="Implemente a solução.",
             languages=[],
             test_cases=[],
         )
@@ -98,6 +129,7 @@ def test_assignment_create_request_when_code_type_matches_config():
         type=AssignmentType.CODE,
         release_policy=ReleasePolicyType.ON_REVIEW,
         config=CodeAssignmentConfig(
+            statement="Implemente a solução.",
             languages=[LanguageConfig(name="python3", starter_code="")],
             test_cases=[TestCaseConfig(id=1, input="1\n", expected_output="1\n")],
         ),
@@ -113,6 +145,7 @@ def test_assignment_create_request_when_type_mismatches_config_should_fail():
             description="Múltipla escolha",
             type=AssignmentType.QUESTIONNAIRE,
             config=CodeAssignmentConfig(
+                statement="Implemente a solução.",
                 languages=[LanguageConfig(name="python3", starter_code="")],
                 test_cases=[],
             ),
@@ -175,6 +208,7 @@ def test_assignment_create_request_when_code_with_immediate_policy_should_fail()
             type=AssignmentType.CODE,
             release_policy=ReleasePolicyType.IMMEDIATE,
             config=CodeAssignmentConfig(
+                statement="Implemente a solução.",
                 languages=[LanguageConfig(name="python3", starter_code="")],
                 test_cases=[],
             ),

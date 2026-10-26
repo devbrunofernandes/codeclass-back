@@ -67,6 +67,7 @@ pedagógico estritamente confidencial para apoiar o professor da disciplina na c
 --- DADOS DA ATIVIDADE ---
 Título: {assignment.title}
 Descrição: {assignment.description or "Sem descrição adicional"}
+Enunciado: {assignment.config.get("statement") or "Sem enunciado cadastrado"}
 Pontuação Máxima (Nota): {max_grade}
 Rubricas / Critérios de Avaliação: {rubrics}
 Casos de Teste Esperados: {json.dumps(test_cases, ensure_ascii=False) if test_cases else "Nenhum caso fornecido"}

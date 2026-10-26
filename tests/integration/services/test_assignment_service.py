@@ -30,6 +30,7 @@ async def test_assignment_service_create_and_list_assignment(
         type=AssignmentType.CODE,
         release_policy=ReleasePolicyType.ON_REVIEW,
         config=CodeAssignmentConfig(
+            statement="Implemente a solução.",
             languages=[LanguageConfig(name="python3", starter_code="")],
             test_cases=[TestCaseConfig(id=1, input="1\n", expected_output="1\n")],
         ),

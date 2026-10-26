@@ -56,6 +56,7 @@ async def test_runner_live_real_network_execution_e2e(
             "type": "code",
             "release_policy": "on_review",
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "time_limit_sec": 3.0,
                 "memory_limit_mb": 128,

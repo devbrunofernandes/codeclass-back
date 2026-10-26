@@ -200,6 +200,7 @@ async def test_test_run_when_no_test_cases_configured_should_return_400(
         classroom_with_student,
         type=AssignmentType.CODE,
         config={
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3"}],
             "time_limit_sec": 2.0,
             "memory_limit_mb": 128,

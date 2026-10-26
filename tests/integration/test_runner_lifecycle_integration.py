@@ -42,6 +42,7 @@ async def test_runner_lifecycle_and_ephemeral_guarantee_integration(
             "type": "code",
             "release_policy": "on_review",
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [
                     {
                         "name": "python3",

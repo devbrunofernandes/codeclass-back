@@ -56,6 +56,7 @@ def dummy_code_assignment() -> Assignment:
         release_policy=ReleasePolicyType.ON_REVIEW,
         config={
             "max_grade": 10.0,
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3"}],
             "rubrics": "Complexidade O(log n) e tratamento de lista vazia.",
         },

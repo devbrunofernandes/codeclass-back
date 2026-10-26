@@ -49,6 +49,7 @@ async def test_full_submission_lifecycle_code_and_unsubmit_e2e(
             "release_policy": "on_review",
             "deadline": (datetime.now(UTC) + timedelta(days=7)).isoformat(),
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3", "starter_code": "def bfs(): pass"}],
                 "time_limit_sec": 2.0,
                 "memory_limit_mb": 128,
@@ -282,6 +283,7 @@ async def test_ai_background_processing_failure_fallback_e2e(
             "type": "code",
             "release_policy": "on_review",
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "max_grade": 10.0,
             },
@@ -352,6 +354,7 @@ async def test_draft_resubmission_idempotency_e2e(
             "type": "code",
             "release_policy": "on_review",
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "max_grade": 10.0,
             },
@@ -444,6 +447,7 @@ async def test_full_teacher_evaluation_and_student_feedback_lifecycle_e2e(
             "type": "code",
             "release_policy": "on_review",
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "max_grade": 10.0,
             },
@@ -603,6 +607,7 @@ async def test_batch_evaluation_release_lifecycle_integration_e2e(
             "release_policy": "on_review",
             "deadline": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "rubric": "Corretude do algoritmo",
             },
@@ -723,6 +728,7 @@ async def test_selective_batch_evaluation_release_and_stats_lifecycle_e2e(
             "release_policy": "on_review",
             "deadline": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "rubric": "Corretude do algoritmo",
             },
@@ -862,6 +868,7 @@ async def test_submission_draft_autosave_lifecycle_and_ai_retry_e2e(
             "release_policy": "on_review",
             "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
             "config": {
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [
                     {"name": "python3", "starter_code": "def mergesort(): pass"}
                 ],

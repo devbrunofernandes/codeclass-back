@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.assignment import Assignment
 from app.models.enums import SubmissionStatus
 from app.models.submission import Submission
 from tests.conftest import TenantContext
@@ -39,6 +40,7 @@ async def test_full_assignment_lifecycle_and_security(
         "release_policy": "on_review",
         "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
         "config": {
+            "statement": "Implemente as rotações.\nPreserve as propriedades da árvore.",
             "languages": [{"name": "python3", "starter_code": "class RBTree: pass"}],
             "time_limit_sec": 2.5,
             "memory_limit_mb": 256,
@@ -66,6 +68,10 @@ async def test_full_assignment_lifecycle_and_security(
     student_data = student_get_res.json()
     assert "rubric" not in student_data["config"]
     assert len(student_data["config"]["test_cases"]) == 1
+    assert student_data["config"]["statement"] == code_payload["config"]["statement"]
+    persisted = await db_session.get(Assignment, uuid.UUID(code_assignment_id))
+    assert persisted is not None
+    assert persisted.config["statement"] == code_payload["config"]["statement"]
 
     # 4. Aluno lista atividades da turma
     list_res = await async_client.get(
@@ -75,6 +81,28 @@ async def test_full_assignment_lifecycle_and_security(
     assert list_res.status_code == 200
     assert len(list_res.json()) == 1
     assert "rubric" not in list_res.json()[0]["config"]
+    assert list_res.json()[0]["config"]["statement"] == persisted.config["statement"]
+
+    # Atualiza o enunciado e confirma persistência e visibilidade discente.
+    updated_config = {
+        **code_payload["config"],
+        "statement": "Inclua também rotação dupla.",
+    }
+    updated = await async_client.patch(
+        f"/api/v1/assignments/{code_assignment_id}",
+        json={"config": updated_config},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert updated.status_code == 200
+    await db_session.refresh(persisted)
+    assert persisted.config["statement"] == updated_config["statement"]
+    student_updated = await async_client.get(
+        f"/api/v1/assignments/{code_assignment_id}",
+        headers=tenant.student.auth_headers,
+    )
+    assert student_updated.status_code == 200
+    assert student_updated.json()["config"]["statement"] == updated_config["statement"]
+    assert "rubric" not in student_updated.json()["config"]
 
     # 5. Professor atualiza prazo e título da tarefa
     patch_res = await async_client.patch(
@@ -151,6 +179,7 @@ async def test_student_my_assignments_lifecycle_integration(
         "release_policy": "on_review",
         "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
         "config": {
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3", "starter_code": "def bfs(): pass"}],
             "time_limit_sec": 2.0,
             "memory_limit_mb": 128,
@@ -239,6 +268,7 @@ async def test_student_my_assignments_lifecycle_integration(
         "release_policy": "on_review",
         "deadline": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
         "config": {
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3", "starter_code": "def old(): pass"}],
             "time_limit_sec": 1.0,
             "memory_limit_mb": 64,

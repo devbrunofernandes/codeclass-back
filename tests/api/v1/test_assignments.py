@@ -11,6 +11,83 @@ from tests.conftest import TenantContext
 # --- Testes de Criação (POST /classrooms/{id}/assignments) ---
 
 
+@pytest.mark.parametrize("statement", ["", "Enunciado válido"])
+@pytest.mark.asyncio
+async def test_update_assignment_when_config_mixes_types_should_return_422(
+    async_client, tenant, assignment_without_submissions, statement
+):
+    response = await async_client.patch(
+        f"/api/v1/assignments/{assignment_without_submissions.id}",
+        json={
+            "config": {
+                "statement": statement,
+                "languages": [{"name": "python3"}],
+                "questions": [
+                    {"id": 1, "type": "open", "points": 1, "statement": "Explique."}
+                ],
+            }
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_code_assignment_when_config_is_questionnaire_should_return_400(
+    async_client, tenant, assignment_without_submissions
+):
+    response = await async_client.patch(
+        f"/api/v1/assignments/{assignment_without_submissions.id}",
+        json={
+            "config": {
+                "questions": [
+                    {"id": 1, "type": "open", "points": 1, "statement": "Explique."}
+                ]
+            }
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("statement", [None, "", "   ", 123, []])
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+@pytest.mark.asyncio
+async def test_write_assignment_when_statement_is_invalid_should_return_422(
+    async_client, tenant, classroom, assignment_without_submissions, statement, method
+):
+    payload = {
+        "title": "Soma",
+        "type": "code",
+        "config": {"statement": statement, "languages": [{"name": "python3"}]},
+    }
+    url = (
+        f"/api/v1/classrooms/{classroom.id}/assignments"
+        if method == "POST"
+        else f"/api/v1/assignments/{assignment_without_submissions.id}"
+    )
+    response = await async_client.request(
+        method, url, json=payload, headers=tenant.teacher.auth_headers
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_assignment_when_statement_is_missing_should_return_422(
+    async_client, tenant, classroom
+):
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/assignments",
+        json={
+            "title": "Soma",
+            "type": "code",
+            "config": {"languages": [{"name": "python3"}]},
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_create_code_assignment_when_called_by_teacher_should_create_successfully_201(
     async_client: AsyncClient, tenant: TenantContext, classroom: Classroom
@@ -22,6 +99,7 @@ async def test_create_code_assignment_when_called_by_teacher_should_create_succe
         "type": "code",
         "release_policy": "on_review",
         "config": {
+            "statement": "Ordene os valores recebidos.\nUse MergeSort.",
             "languages": [{"name": "python3", "starter_code": "def mergesort(): pass"}],
             "time_limit_sec": 3.0,
             "memory_limit_mb": 256,
@@ -44,6 +122,7 @@ async def test_create_code_assignment_when_called_by_teacher_should_create_succe
     assert data["type"] == "code"
     assert data["classroom_id"] == str(classroom.id)
     assert "rubric" in data["config"]
+    assert data["config"]["statement"] == payload["config"]["statement"]
 
 
 @pytest.mark.asyncio
@@ -139,6 +218,7 @@ async def test_create_code_assignment_with_immediate_policy_should_return_422(
         "type": "code",
         "release_policy": "immediate",
         "config": {
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3", "starter_code": ""}],
             "test_cases": [],
         },
@@ -199,6 +279,7 @@ async def test_create_assignment_when_called_by_student_or_admin_should_return_4
         "title": "Atividade Proibida",
         "type": "code",
         "config": {
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [{"name": "python3", "starter_code": ""}],
             "test_cases": [],
         },
@@ -412,6 +493,7 @@ async def test_update_assignment_when_called_by_teacher_should_update_successful
         "description": "Nova descrição atualizada",
         "deadline": new_deadline,
         "config": {
+            "statement": "Busque o alvo.\nRetorne -1 quando ausente.",
             "languages": [{"name": "python3", "starter_code": "# code"}],
             "time_limit_sec": 4.0,
             "memory_limit_mb": 512,
@@ -433,6 +515,7 @@ async def test_update_assignment_when_called_by_teacher_should_update_successful
     assert data["title"] == "Busca Binária Otimizada"
     assert data["description"] == "Nova descrição atualizada"
     assert data["config"]["time_limit_sec"] == 4.0
+    assert data["config"]["statement"] == payload["config"]["statement"]
 
 
 @pytest.mark.asyncio

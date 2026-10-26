@@ -31,6 +31,7 @@ def make_assignment(
         type=assignment_type,
         release_policy=ReleasePolicyType.ON_REVIEW,
         config={
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": langs,
             "time_limit_sec": time_limit_sec,
             "memory_limit_mb": memory_limit_mb,

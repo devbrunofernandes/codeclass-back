@@ -47,6 +47,7 @@ async def test_ai_live_real_network_inference_e2e(
             "release_policy": "on_review",
             "config": {
                 "max_grade": 10.0,
+                "statement": "Implemente a solução conforme os casos de teste.",
                 "languages": [{"name": "python3"}],
                 "rubrics": "Solução deve possuir complexidade de tempo O(n) utilizando hash map e tratar casos de borda com arrays pequenos.",
                 "test_cases": [

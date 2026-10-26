@@ -79,15 +79,17 @@ class AssignmentService:
         )
         effective_config = assignment.config
         if request.config is not None:
-            raw_cfg = (
-                request.config.model_dump()
-                if hasattr(request.config, "model_dump")
-                else request.config
-            )
-            if assignment.type == AssignmentType.CODE:
-                CodeAssignmentConfig.model_validate(raw_cfg)
-            elif assignment.type == AssignmentType.QUESTIONNAIRE:
-                QuestionnaireAssignmentConfig.model_validate(raw_cfg)
+            if (
+                assignment.type == AssignmentType.CODE
+                and not isinstance(request.config, CodeAssignmentConfig)
+            ) or (
+                assignment.type == AssignmentType.QUESTIONNAIRE
+                and not isinstance(request.config, QuestionnaireAssignmentConfig)
+            ):
+                raise BadRequestException(
+                    "A configuração deve corresponder ao tipo da atividade."
+                )
+            raw_cfg = request.config.model_dump()
             effective_config = raw_cfg
             assignment.config = raw_cfg
 

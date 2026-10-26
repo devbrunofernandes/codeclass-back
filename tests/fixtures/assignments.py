@@ -35,6 +35,7 @@ def create_assignment(
         if config is None:
             if type == AssignmentType.CODE:
                 config = {
+                    "statement": "Implemente a solução conforme os casos de teste.",
                     "languages": [
                         {
                             "name": "python3",
@@ -96,6 +97,7 @@ async def assignment_without_submissions(
         release_policy=ReleasePolicyType.ON_REVIEW,
         deadline=datetime.now(UTC) + timedelta(days=7),
         config={
+            "statement": "Implemente a solução conforme os casos de teste.",
             "languages": [
                 {
                     "name": "python3",

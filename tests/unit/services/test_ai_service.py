@@ -35,6 +35,8 @@ async def test_evaluate_code_submission_success(dummy_code_assignment: Assignmen
     assert result.reasoning == "A solução atende aos critérios com excelência."
     assert result.item_insights is None
     mock_provider.generate_structured_insight.assert_awaited_once()
+    prompt = mock_provider.generate_structured_insight.call_args.kwargs["prompt"]
+    assert f"Enunciado: {dummy_code_assignment.config['statement']}" in prompt
 
 
 @pytest.mark.asyncio
