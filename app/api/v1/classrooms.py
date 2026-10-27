@@ -21,6 +21,7 @@ from app.schemas.classroom import (
     ClassroomTeacherUpdateRequest,
     ClassroomUpdateRequest,
     EnrollStudentRequest,
+    EnrollStudentsBatchRequest,
 )
 from app.services.classroom_service import classroom_service
 
@@ -117,6 +118,24 @@ async def delete_classroom(
 
 
 # --- Matrículas e Membros da Sala ---
+
+
+@router.post(
+    "/{classroom_id}/students/batch",
+    response_model=list[ClassroomStudentMemberResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Matricula alunos existentes em lote",
+)
+async def enroll_students_batch(
+    request: EnrollStudentsBatchRequest,
+    context: Annotated[
+        ClassroomContext, Depends(require_classroom_permission(can_manage=True))
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ClassroomStudentMemberResponse]:
+    return await classroom_service.enroll_students_batch(
+        context.classroom, request.student_ids, db
+    )
 
 
 @router.post(

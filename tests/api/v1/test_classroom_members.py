@@ -162,3 +162,146 @@ async def test_delete_student_from_classroom_rbac_and_removal(
         headers=tenant.teacher.auth_headers,
     )
     assert res_not_found.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_valid_should_create_all(
+    async_client, tenant, classroom
+):
+    ids = [str(tenant.student.user.id), str(tenant.other_student.user.id)]
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json={"student_ids": ids},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 201
+    assert [item["student_id"] for item in response.json()] == ids
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_conflict_should_not_create_remaining(
+    async_client, tenant, classroom, enrolled_student, db_session
+):
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json={
+            "student_ids": [
+                str(tenant.student.user.id),
+                str(tenant.other_student.user.id),
+            ]
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 409
+    assert (
+        await db_session.get(
+            ClassroomStudent, (classroom.id, tenant.other_student.user.id)
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"student_ids": []},
+        {"student_ids": ["invalid"]},
+        {"student_ids": ["00000000-0000-0000-0000-000000000001"] * 2},
+        {"student_ids": ["00000000-0000-0000-0000-000000000001"] * 101},
+    ],
+)
+async def test_enroll_batch_when_payload_invalid_should_return_422(
+    async_client, tenant, classroom, payload
+):
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json=payload,
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_unauthorized_should_reject(
+    async_client, tenant, classroom
+):
+    url = f"/api/v1/classrooms/{classroom.id}/students/batch"
+    payload = {"student_ids": [str(tenant.student.user.id)]}
+    assert (await async_client.post(url, json=payload)).status_code == 401
+    assert (
+        await async_client.post(url, json=payload, headers=tenant.student.auth_headers)
+    ).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_invalid_member_should_leave_batch_unchanged(
+    async_client, tenant, classroom, db_session, create_tenant
+):
+    other = await create_tenant("Outro lote")
+    url = f"/api/v1/classrooms/{classroom.id}/students/batch"
+    for invalid in [other.student.user.id, tenant.teacher.user.id]:
+        response = await async_client.post(
+            url,
+            json={"student_ids": [str(tenant.student.user.id), str(invalid)]},
+            headers=tenant.teacher.auth_headers,
+        )
+        assert response.status_code == 400
+        assert (
+            await db_session.get(
+                ClassroomStudent, (classroom.id, tenant.student.user.id)
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_classroom_missing_or_forbidden_should_reject(
+    async_client, tenant, classroom, create_tenant
+):
+    from uuid import uuid4
+
+    payload = {"student_ids": [str(tenant.student.user.id)]}
+    missing = await async_client.post(
+        f"/api/v1/classrooms/{uuid4()}/students/batch",
+        json=payload,
+        headers=tenant.owner.auth_headers,
+    )
+    assert missing.status_code == 404
+    wrong_teacher = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json=payload,
+        headers=tenant.other_teacher.auth_headers,
+    )
+    assert wrong_teacher.status_code == 403
+    other = await create_tenant("Outro tenant sala")
+    other_tenant = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json=payload,
+        headers=other.owner.auth_headers,
+    )
+    assert other_tenant.status_code in (403, 404)
+
+
+@pytest.mark.asyncio
+async def test_enroll_batch_when_student_inactive_should_not_enroll_any(
+    async_client, tenant, classroom, db_session
+):
+    tenant.other_student.member.is_active = False
+    await db_session.commit()
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/students/batch",
+        json={
+            "student_ids": [
+                str(tenant.student.user.id),
+                str(tenant.other_student.user.id),
+            ]
+        },
+        headers=tenant.owner.auth_headers,
+    )
+    assert response.status_code == 400
+    assert (
+        await db_session.get(ClassroomStudent, (classroom.id, tenant.student.user.id))
+        is None
+    )

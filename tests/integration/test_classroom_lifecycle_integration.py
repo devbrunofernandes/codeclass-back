@@ -287,3 +287,34 @@ async def test_full_classroom_lifecycle(
         )
     )
     assert res_enrolled.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_enrollment_lifecycle_should_persist_and_remove_all(
+    async_client, tenant, classroom
+):
+    ids = [tenant.student.user.id, tenant.other_student.user.id]
+    url = f"/api/v1/classrooms/{classroom.id}/students/batch"
+    response = await async_client.post(
+        url,
+        json={"student_ids": [str(i) for i in ids]},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 201
+    async with async_session_maker() as session:
+        for student_id in ids:
+            assert (
+                await session.get(ClassroomStudent, (classroom.id, student_id))
+                is not None
+            )
+    for student_id in ids:
+        response = await async_client.delete(
+            f"/api/v1/classrooms/{classroom.id}/students/{student_id}",
+            headers=tenant.teacher.auth_headers,
+        )
+        assert response.status_code == 204
+    async with async_session_maker() as session:
+        for student_id in ids:
+            assert (
+                await session.get(ClassroomStudent, (classroom.id, student_id)) is None
+            )

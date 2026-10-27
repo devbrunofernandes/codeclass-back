@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ClassroomCreateRequest(BaseModel):
@@ -56,6 +56,19 @@ class ClassroomMyClassResponse(ClassroomResponse):
 
 class EnrollStudentRequest(BaseModel):
     student_id: UUID
+
+
+class EnrollStudentsBatchRequest(BaseModel):
+    student_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("student_ids")
+    @classmethod
+    def validate_unique_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("A lista contém alunos duplicados.")
+        return value
 
 
 class ClassroomStudentMemberResponse(BaseModel):

@@ -342,6 +342,66 @@ class ClassroomService:
 
     # --- Gestão de Matrículas e Membros da Turma ---
 
+    async def enroll_students_batch(
+        self, classroom: Classroom, student_ids: list[UUID], db: AsyncSession
+    ) -> list[ClassroomStudentMemberResponse]:
+        members_stmt = (
+            select(OrganizationMember)
+            .options(selectinload(OrganizationMember.user))
+            .where(
+                OrganizationMember.organization_id == classroom.organization_id,
+                OrganizationMember.user_id.in_(student_ids),
+            )
+            .order_by(OrganizationMember.user_id)
+            .with_for_update()
+        )
+        members = (await db.execute(members_stmt)).scalars().all()
+        by_id = {member.user_id: member for member in members}
+        for student_id in student_ids:
+            member = by_id.get(student_id)
+            if member is None:
+                raise BadRequestException(
+                    f"Aluno {student_id} não pertence à organização."
+                )
+            if not member.is_active or member.role != OrgRole.STUDENT:
+                raise BadRequestException(
+                    f"Aluno {student_id} não é estudante ativo da organização."
+                )
+
+        enrolled_stmt = select(ClassroomStudent.student_id).where(
+            ClassroomStudent.classroom_id == classroom.id,
+            ClassroomStudent.student_id.in_(student_ids),
+        )
+        enrolled = (await db.execute(enrolled_stmt)).scalars().all()
+        if enrolled:
+            raise ConflictException(
+                "Alunos já matriculados: " + ", ".join(map(str, enrolled))
+            )
+
+        enrollments = [
+            ClassroomStudent(classroom_id=classroom.id, student_id=student_id)
+            for student_id in student_ids
+        ]
+        db.add_all(enrollments)
+        try:
+            await db.flush()
+            response = [
+                ClassroomStudentMemberResponse(
+                    student_id=student_id,
+                    full_name=by_id[student_id].user.full_name,
+                    email=by_id[student_id].user.email,
+                    enrolled_at=enrollment.enrolled_at,
+                )
+                for student_id, enrollment in zip(student_ids, enrollments, strict=True)
+            ]
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise ConflictException(
+                "Um ou mais alunos já estão matriculados nesta turma."
+            )
+        return response
+
     async def enroll_student(
         self,
         classroom: Classroom,
