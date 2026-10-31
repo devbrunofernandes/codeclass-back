@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -14,6 +15,106 @@ from app.infrastructure.runner.judge0_provider import Judge0Provider
 from app.infrastructure.runner.piston_provider import PistonProvider
 from app.models.enums import TestRunVerdict
 from app.schemas.assignment import TestCaseConfig
+from app.schemas.runner import TestCaseResult
+
+
+@pytest.mark.asyncio
+async def test_piston_batch_limits_concurrency_and_preserves_order() -> None:
+    active = 0
+    peak = 0
+
+    async def execute(**kwargs: object) -> TestCaseResult:
+        nonlocal active, peak
+        tc = kwargs["tc"]
+        assert isinstance(tc, TestCaseConfig)
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return TestCaseResult(test_case_id=tc.id, status=TestRunVerdict.ACCEPTED)
+
+    cases = [TestCaseConfig(id=i, input="", expected_output="") for i in range(1, 13)]
+    with patch.object(PistonProvider, "_execute_single_test_case", side_effect=execute):
+        results = await PistonProvider().execute_batch("pass", "python", cases, 2, 128)
+    assert peak <= 5
+    assert peak > 1
+    assert [result.test_case_id for result in results] == list(range(1, 13))
+
+
+@pytest.mark.asyncio
+async def test_piston_batch_failure_cancels_pending_cases() -> None:
+    started: list[int] = []
+    cancelled: list[int] = []
+
+    async def execute(**kwargs: object) -> TestCaseResult:
+        tc = kwargs["tc"]
+        assert isinstance(tc, TestCaseConfig)
+        started.append(tc.id)
+        if tc.id == 1:
+            await asyncio.sleep(0.01)
+            raise RunnerError("failed", status_code=502)
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            cancelled.append(tc.id)
+            raise
+        return TestCaseResult(test_case_id=tc.id, status=TestRunVerdict.ACCEPTED)
+
+    cases = [TestCaseConfig(id=i, input="", expected_output="") for i in range(1, 11)]
+    with (
+        patch.object(PistonProvider, "_execute_single_test_case", side_effect=execute),
+        pytest.raises(RunnerError),
+    ):
+        await PistonProvider().execute_batch("pass", "python", cases, 2, 128)
+    await asyncio.sleep(0.02)
+    assert set(started) <= set(range(1, 7))
+    assert set(cancelled) == set(started) - {1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", [{}, {"run": {}}, {"run": {"stdout": ""}}, {"run": {"code": 0}}, []]
+)
+async def test_piston_incomplete_execution_response_should_raise_error(
+    body: object,
+) -> None:
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json=body)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        pytest.raises(RunnerError, match="Resposta inválida"),
+    ):
+        await PistonProvider().execute_batch(
+            code="pass",
+            language="python",
+            test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+            time_limit_sec=2,
+            memory_limit_mb=128,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_type", [PistonProvider, Judge0Provider])
+async def test_runner_timeout_allows_configured_execution_limit(
+    provider_type: type,
+) -> None:
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.__aenter__.return_value = client
+    client.post.side_effect = httpx.TimeoutException("timeout")
+    with (
+        patch.object(settings, "RUNNER_TIMEOUT_SEC", 15.0),
+        patch("httpx.AsyncClient", return_value=client) as factory,
+        pytest.raises(RunnerTimeoutError),
+    ):
+        await provider_type().execute_batch(
+            code="pass",
+            language="python",
+            test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+            time_limit_sec=60,
+            memory_limit_mb=128,
+        )
+    assert factory.call_args.kwargs["timeout"] >= 75
 
 
 def test_factory_returns_judge0_provider() -> None:
@@ -517,6 +618,8 @@ async def test_piston_execute_batch_passes_memory_limit() -> None:
         )
 
     assert captured_payload.get("run_memory_limit") == 64 * 1024 * 1024
+    assert captured_payload.get("run_timeout") == 2000
+    assert captured_payload.get("run_cpu_time") == 2000
 
 
 @pytest.mark.asyncio

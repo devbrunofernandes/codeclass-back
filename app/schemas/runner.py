@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import TestRunVerdict
+from app.schemas.assignment import TestCaseConfig
 
 
 class TestRunRequest(BaseModel):
@@ -15,6 +16,9 @@ class TestRunRequest(BaseModel):
     code: str = Field(
         min_length=1,
         description="Código-fonte do estudante a ser avaliado contra os casos de teste.",
+    )
+    test_cases: list[TestCaseConfig] = Field(
+        min_length=1, max_length=20, description="Casos a executar nesta requisição."
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)

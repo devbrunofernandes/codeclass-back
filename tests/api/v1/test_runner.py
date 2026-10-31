@@ -13,6 +13,60 @@ from tests.fixtures.tenants import TenantContext
 
 
 @pytest.mark.asyncio
+async def test_test_run_custom_cases_replace_saved_cases_should_return_200(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom_with_student: Classroom,
+    create_assignment: Callable[..., Awaitable[Assignment]],
+    mock_runner_provider: MockRunnerProvider,
+) -> None:
+    assignment = await create_assignment(
+        classroom_with_student, type=AssignmentType.CODE
+    )
+    cases = [{"id": 42, "input": "  \n", "expected_output": ""}]
+    response = await async_client.post(
+        f"/api/v1/assignments/{assignment.id}/test-run",
+        json={"language": "python3", "code": "pass", "test_cases": cases},
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["results"][0]["test_case_id"] == 42
+    assert [
+        tc.model_dump() for tc in mock_runner_provider.invocations[0]["test_cases"]
+    ] == cases
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cases",
+    [
+        None,
+        [],
+        [{"id": 1, "input": ""}],
+        [{"id": i, "input": "", "expected_output": ""} for i in range(1, 22)],
+    ],
+)
+async def test_test_run_invalid_cases_should_return_422_without_execution(
+    async_client: AsyncClient,
+    tenant: TenantContext,
+    classroom_with_student: Classroom,
+    create_assignment: Callable[..., Awaitable[Assignment]],
+    mock_runner_provider: MockRunnerProvider,
+    cases: object,
+) -> None:
+    assignment = await create_assignment(
+        classroom_with_student, type=AssignmentType.CODE
+    )
+    response = await async_client.post(
+        f"/api/v1/assignments/{assignment.id}/test-run",
+        json={"language": "python3", "code": "pass", "test_cases": cases},
+        headers=tenant.student.auth_headers,
+    )
+    assert response.status_code == 422
+    assert not mock_runner_provider.invocations
+
+
+@pytest.mark.asyncio
 async def test_test_run_success_student_should_return_200_accepted(
     async_client: AsyncClient,
     tenant: TenantContext,
@@ -117,7 +171,7 @@ async def test_test_run_teacher_can_execute_should_return_200(
 
 
 @pytest.mark.asyncio
-async def test_test_run_admin_and_owner_can_execute_should_return_200(
+async def test_test_run_admin_and_owner_should_return_403(
     async_client: AsyncClient,
     tenant: TenantContext,
     classroom_with_student: Classroom,
@@ -134,7 +188,7 @@ async def test_test_run_admin_and_owner_can_execute_should_return_200(
         json=valid_test_run_payload,
         headers=tenant.admin.auth_headers,
     )
-    assert admin_resp.status_code == 200
+    assert admin_resp.status_code == 403
 
     # Owner
     owner_resp = await async_client.post(
@@ -142,7 +196,7 @@ async def test_test_run_admin_and_owner_can_execute_should_return_200(
         json=valid_test_run_payload,
         headers=tenant.owner.auth_headers,
     )
-    assert owner_resp.status_code == 200
+    assert owner_resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -180,7 +234,11 @@ async def test_test_run_when_language_not_allowed_should_return_400(
 
     response = await async_client.post(
         f"/api/v1/assignments/{assignment.id}/test-run",
-        json={"language": "rust", "code": "fn main() {}"},
+        json={
+            "language": "rust",
+            "code": "fn main() {}",
+            "test_cases": [{"id": 1, "input": "", "expected_output": ""}],
+        },
         headers=tenant.student.auth_headers,
     )
 
@@ -189,7 +247,7 @@ async def test_test_run_when_language_not_allowed_should_return_400(
 
 
 @pytest.mark.asyncio
-async def test_test_run_when_no_test_cases_configured_should_return_400(
+async def test_test_run_when_assignment_has_no_cases_should_execute_submitted_cases(
     async_client: AsyncClient,
     tenant: TenantContext,
     classroom_with_student: Classroom,
@@ -214,8 +272,8 @@ async def test_test_run_when_no_test_cases_configured_should_return_400(
         headers=tenant.student.auth_headers,
     )
 
-    assert response.status_code == 400
-    assert "não possui casos de teste configurados" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["total_tests"] == 1
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,9 @@ start:
 	@echo "--> Iniciando infraestrutura do Supabase..."
 	@npx supabase start
 	@echo "--> Iniciando executor de código local (Piston)..."
-	@docker start codeclass-runner 2>/dev/null || (docker run -d --privileged -v codeclass_piston:/piston --name codeclass-runner -p 2000:2000 ghcr.io/engineer-man/piston && sleep 2 && curl -s -X POST http://localhost:2000/api/v2/packages -H "Content-Type: application/json" -d '{"language": "python", "version": "3.12.0"}' >/dev/null 2>&1)
+	@if docker inspect codeclass-runner >/dev/null 2>&1 && ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' codeclass-runner | grep -qx 'PISTON_RUN_TIMEOUT=60000'; then echo "Container Piston antigo: execute docker stop codeclass-runner e docker rename codeclass-runner codeclass-runner-previous, depois make start. O volume será preservado."; exit 1; fi
+	@if docker inspect codeclass-runner >/dev/null 2>&1 && ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' codeclass-runner | grep -qx 'PISTON_RUN_CPU_TIME=60000'; then echo "Container Piston com limite de CPU antigo: execute docker stop codeclass-runner e docker rename codeclass-runner codeclass-runner-previous, depois make start. O volume será preservado."; exit 1; fi
+	@docker start codeclass-runner 2>/dev/null || (docker run -d --privileged -e PISTON_RUN_TIMEOUT=60000 -e PISTON_RUN_CPU_TIME=60000 -v codeclass_piston:/piston --name codeclass-runner -p 2000:2000 ghcr.io/engineer-man/piston && sleep 2 && curl -s -X POST http://localhost:2000/api/v2/packages -H "Content-Type: application/json" -d '{"language": "python", "version": "3.12.0"}' >/dev/null 2>&1)
 	@echo "--> Aplicando migrações do Alembic..."
 	@uv run alembic upgrade head
 	@echo "--> Aplicando seed do Supabase..."

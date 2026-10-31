@@ -77,6 +77,7 @@ class PistonProvider(CodeRunnerProvider):
             "files": [{"content": code}],
             "stdin": tc.input,
             "run_timeout": int(time_limit_sec * 1000),
+            "run_cpu_time": int(time_limit_sec * 1000),
         }
         if memory_limit_mb and memory_limit_mb > 0:
             payload["run_memory_limit"] = int(memory_limit_mb * 1024 * 1024)
@@ -96,8 +97,11 @@ class PistonProvider(CodeRunnerProvider):
                 status_code=502,
             ) from exc
 
+        if not isinstance(data, dict) or not isinstance(data.get("compile", {}), dict):
+            raise RunnerError(
+                "Resposta inválida recebida do executor de código.", status_code=502
+            )
         compile_data = data.get("compile") or {}
-        run_data = data.get("run") or {}
 
         # 1. Checa erro de compilação
         compile_code = compile_data.get("code")
@@ -112,10 +116,23 @@ class PistonProvider(CodeRunnerProvider):
                 memory_kb=0,
             )
 
+        run_data = data.get("run")
+        if not isinstance(run_data, dict) or not (
+            isinstance(run_data.get("code"), int)
+            or isinstance(run_data.get("signal"), str)
+        ):
+            raise RunnerError(
+                "Resposta inválida recebida do executor de código.", status_code=502
+            )
+
         run_signal = run_data.get("signal")
         run_code = run_data.get("code")
-        stdout = run_data.get("stdout", "")
+        stdout = run_data.get("stdout")
         stderr = run_data.get("stderr", "")
+        if not isinstance(stdout, str) or not isinstance(stderr, str):
+            raise RunnerError(
+                "Resposta inválida recebida do executor de código.", status_code=502
+            )
 
         # 2. Checa Time Limit Exceeded (SIGKILL ou timeout sinalizado)
         if run_signal in ("SIGKILL", "SIGTERM", "SIGXCPU"):
@@ -173,12 +190,14 @@ class PistonProvider(CodeRunnerProvider):
         headers = self.build_headers()
         base_url = (settings.RUNNER_API_URL or "http://localhost:2000").rstrip("/")
         execute_url = f"{base_url}/api/v2/execute"
-        timeout_limit = settings.RUNNER_TIMEOUT_SEC or 15.0
+        timeout_limit = time_limit_sec + (settings.RUNNER_TIMEOUT_SEC or 15.0)
+        semaphore = asyncio.Semaphore(5)
 
         async with httpx.AsyncClient(timeout=timeout_limit) as client:
-            try:
-                tasks = [
-                    self._execute_single_test_case(
+
+            async def execute_case(tc: TestCaseConfig) -> TestCaseResult:
+                async with semaphore:
+                    return await self._execute_single_test_case(
                         client=client,
                         execute_url=execute_url,
                         headers=headers,
@@ -188,9 +207,16 @@ class PistonProvider(CodeRunnerProvider):
                         time_limit_sec=time_limit_sec,
                         memory_limit_mb=memory_limit_mb,
                     )
-                    for tc in test_cases
-                ]
-                return await asyncio.gather(*tasks)
+
+            try:
+                tasks = [asyncio.create_task(execute_case(tc)) for tc in test_cases]
+                try:
+                    return await asyncio.gather(*tasks)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
             except httpx.TimeoutException as exc:
                 raise RunnerTimeoutError(

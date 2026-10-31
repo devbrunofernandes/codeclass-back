@@ -5,7 +5,6 @@ from app.core.exceptions import BadRequestException
 from app.infrastructure.runner.factory import get_runner_provider
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, TestRunVerdict
-from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult, TestRunRequest, TestRunResponse
 
 
@@ -56,17 +55,6 @@ class RunnerService:
                 f"Linguagem '{request.language}' não é permitida para esta atividade."
             )
 
-        # 4. Valida se existem casos de teste configurados
-        raw_test_cases = config.get("test_cases", [])
-        if not raw_test_cases:
-            raise BadRequestException(
-                "Esta atividade não possui casos de teste configurados para execução."
-            )
-
-        test_cases: list[TestCaseConfig] = [
-            TestCaseConfig.model_validate(tc) for tc in raw_test_cases
-        ]
-
         time_limit_sec = float(config.get("time_limit_sec", 2.0))
         memory_limit_mb = int(config.get("memory_limit_mb", 128))
 
@@ -77,7 +65,7 @@ class RunnerService:
         results: list[TestCaseResult] = await provider.execute_batch(
             code=request.code,
             language=request.language,
-            test_cases=test_cases,
+            test_cases=request.test_cases,
             time_limit_sec=time_limit_sec,
             memory_limit_mb=memory_limit_mb,
         )

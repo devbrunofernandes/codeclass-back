@@ -63,12 +63,69 @@ async def test_runner_lifecycle_and_ephemeral_guarantee_integration(
     assert assignment_resp.status_code == 201
     assignment_id = assignment_resp.json()["id"]
 
+    custom_cases = [{"id": 77, "input": "", "expected_output": ""}]
+    custom_resp = await async_client.post(
+        f"/api/v1/assignments/{assignment_id}/test-run",
+        json={"language": "python3", "code": "pass", "test_cases": custom_cases},
+        headers=tenant.student.auth_headers,
+    )
+    assert custom_resp.status_code == 200
+    assert custom_resp.json()["results"][0]["test_case_id"] == 77
+    saved_resp = await async_client.get(
+        f"/api/v1/assignments/{assignment_id}", headers=tenant.teacher.auth_headers
+    )
+    assert saved_resp.json()["config"]["test_cases"][0]["id"] == 1
+    mock_runner_provider.invocations.clear()
+
+    empty_config = assignment_resp.json()["config"] | {"test_cases": []}
+    empty_assignment = await async_client.post(
+        f"/api/v1/classrooms/{classroom_id}/assignments",
+        json={
+            "title": "Sem casos",
+            "type": "code",
+            "release_policy": "on_review",
+            "config": empty_config,
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert empty_assignment.status_code == 201
+    empty_id = empty_assignment.json()["id"]
+    assert empty_assignment.json()["config"]["test_cases"] == []
+    custom_empty = await async_client.post(
+        f"/api/v1/assignments/{empty_id}/test-run",
+        json={"language": "python3", "code": "pass", "test_cases": custom_cases},
+        headers=tenant.student.auth_headers,
+    )
+    assert custom_empty.status_code == 200
+    saved_empty = await async_client.get(
+        f"/api/v1/assignments/{empty_id}", headers=tenant.teacher.auth_headers
+    )
+    assert saved_empty.json()["config"]["test_cases"] == []
+    mock_runner_provider.invocations.clear()
+
+    for member in (tenant.admin, tenant.owner):
+        forbidden = await async_client.post(
+            f"/api/v1/assignments/{assignment_id}/test-run",
+            json={
+                "language": "python3",
+                "code": "print(5)",
+                "test_cases": custom_cases,
+            },
+            headers=member.auth_headers,
+        )
+        assert forbidden.status_code == 403
+    assert not mock_runner_provider.invocations
+
     # 3. Aluno executa Test-Run experimental (Caminho Feliz)
     mock_runner_provider.default_verdict = TestRunVerdict.ACCEPTED
     run_resp = await async_client.post(
         f"/api/v1/assignments/{assignment_id}/test-run",
         json={
             "language": "python3",
+            "test_cases": [
+                {"id": 1, "input": "2 3\n", "expected_output": "5\n"},
+                {"id": 2, "input": "-1 1\n", "expected_output": "0\n"},
+            ],
             "code": "import sys\na, b = map(int, sys.stdin.read().split())\nprint(a + b)",
         },
         headers=tenant.student.auth_headers,
@@ -86,6 +143,10 @@ async def test_runner_lifecycle_and_ephemeral_guarantee_integration(
         f"/api/v1/assignments/{assignment_id}/test-run",
         json={
             "language": "python3",
+            "test_cases": [
+                {"id": 1, "input": "2 3\n", "expected_output": "5\n"},
+                {"id": 2, "input": "-1 1\n", "expected_output": "0\n"},
+            ],
             "code": "print(42)",
         },
         headers=tenant.student.auth_headers,

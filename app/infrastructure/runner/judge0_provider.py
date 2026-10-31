@@ -96,7 +96,7 @@ class Judge0Provider(CodeRunnerProvider):
         base_url = (
             settings.RUNNER_API_URL or "https://judge0-ce.p.rapidapi.com"
         ).rstrip("/")
-        timeout_limit = settings.RUNNER_TIMEOUT_SEC or 15.0
+        timeout_limit = time_limit_sec + (settings.RUNNER_TIMEOUT_SEC or 15.0)
 
         memory_limit_kb = int(memory_limit_mb * 1024)
 

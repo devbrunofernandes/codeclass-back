@@ -6,6 +6,7 @@ import pytest
 from app.core.exceptions import BadRequestException
 from app.models.assignment import Assignment
 from app.models.enums import AssignmentType, ReleasePolicyType, TestRunVerdict
+from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult, TestRunRequest
 from app.services.runner_service import RunnerService
 
@@ -44,7 +45,11 @@ def make_assignment(
 async def test_runner_service_rejects_non_code_assignment() -> None:
     service = RunnerService()
     assignment = make_assignment(assignment_type=AssignmentType.QUESTIONNAIRE)
-    request = TestRunRequest(language="python3", code="print(1)")
+    request = TestRunRequest(
+        language="python3",
+        code="print(1)",
+        test_cases=[TestCaseConfig(id=7, input=" \n", expected_output="")],
+    )
 
     with pytest.raises(BadRequestException, match="Apenas atividades do tipo código"):
         await service.execute_test_run(assignment, request)
@@ -54,7 +59,11 @@ async def test_runner_service_rejects_non_code_assignment() -> None:
 async def test_runner_service_rejects_unallowed_language() -> None:
     service = RunnerService()
     assignment = make_assignment(languages=["python3"])
-    request = TestRunRequest(language="javascript", code="console.log(1)")
+    request = TestRunRequest(
+        language="javascript",
+        code="console.log(1)",
+        test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+    )
 
     with pytest.raises(
         BadRequestException, match="não é permitida para esta atividade"
@@ -63,22 +72,36 @@ async def test_runner_service_rejects_unallowed_language() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_service_rejects_empty_test_cases() -> None:
-    service = RunnerService()
+async def test_runner_service_uses_request_cases_even_when_assignment_has_none() -> (
+    None
+):
+    provider = AsyncMock()
+    provider.execute_batch.return_value = [
+        TestCaseResult(test_case_id=7, status=TestRunVerdict.ACCEPTED)
+    ]
+    service = RunnerService(provider)
     assignment = make_assignment(test_cases=[])
-    request = TestRunRequest(language="python3", code="print(1)")
+    request = TestRunRequest(
+        language="python3",
+        code="pass",
+        test_cases=[TestCaseConfig(id=7, input="  \n", expected_output="")],
+    )
 
-    with pytest.raises(
-        BadRequestException, match="não possui casos de teste configurados"
-    ):
-        await service.execute_test_run(assignment, request)
+    response = await service.execute_test_run(assignment, request)
+
+    assert response.results[0].test_case_id == 7
+    assert provider.execute_batch.await_args.kwargs["test_cases"] == request.test_cases
 
 
 @pytest.mark.asyncio
 async def test_runner_service_computes_overall_status_accepted() -> None:
     service = RunnerService()
     assignment = make_assignment()
-    request = TestRunRequest(language="python3", code="print(1)")
+    request = TestRunRequest(
+        language="python3",
+        code="print(1)",
+        test_cases=[TestCaseConfig(id=7, input=" \n", expected_output="")],
+    )
 
     mock_provider = AsyncMock()
     mock_provider.execute_batch.return_value = [
@@ -106,7 +129,11 @@ async def test_runner_service_computes_overall_status_failure_priority() -> None
             {"id": 2, "input": "2\n", "expected_output": "2\n"},
         ]
     )
-    request = TestRunRequest(language="python3", code="print(1)")
+    request = TestRunRequest(
+        language="python3",
+        code="print(1)",
+        test_cases=[TestCaseConfig(id=7, input=" \n", expected_output="")],
+    )
 
     mock_provider = AsyncMock()
     mock_provider.execute_batch.return_value = [

@@ -2,26 +2,43 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.enums import TestRunVerdict
+from app.schemas.assignment import TestCaseConfig
 from app.schemas.runner import TestCaseResult, TestRunRequest, TestRunResponse
 
 
 def test_test_run_request_valid() -> None:
-    req = TestRunRequest(language="python3", code="print('hello')")
+    req = TestRunRequest(
+        language="python3",
+        code="print('hello')",
+        test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+    )
     assert req.language == "python3"
     assert req.code == "print('hello')"
 
 
 def test_test_run_request_strip_whitespace() -> None:
-    req = TestRunRequest(language="  python3  ", code="print(1)")
+    req = TestRunRequest(
+        language="  python3  ",
+        code="print(1)",
+        test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+    )
     assert req.language == "python3"
 
 
 def test_test_run_request_empty_fields_should_raise_validation_error() -> None:
     with pytest.raises(ValidationError):
-        TestRunRequest(language="", code="print(1)")
+        TestRunRequest(
+            language="",
+            code="print(1)",
+            test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+        )
 
     with pytest.raises(ValidationError):
-        TestRunRequest(language="python3", code="")
+        TestRunRequest(
+            language="python3",
+            code="",
+            test_cases=[TestCaseConfig(id=1, input="", expected_output="")],
+        )
 
 
 def test_test_case_result_valid() -> None:

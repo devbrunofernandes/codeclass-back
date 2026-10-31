@@ -38,6 +38,11 @@ O ciclo de vida local é gerenciado via `Makefile`:
   ```
   *A API estará disponível em `http://localhost:8000/docs` (logs em `/tmp/codeclass_api.log`).*
 
+  O Piston criado pelo Makefile aceita limites de execução de até 60 segundos.
+  Containers `codeclass-runner` criados antes dessa configuração precisam ser
+  recriados para receber as variáveis `PISTON_RUN_TIMEOUT` e
+  `PISTON_RUN_CPU_TIME`; o volume `codeclass_piston` preserva os runtimes.
+
 * **Parar a API e os containers:**
   ```bash
   make stop

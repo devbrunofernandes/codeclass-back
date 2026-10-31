@@ -1,7 +1,9 @@
 import pytest
 from httpx import AsyncClient
 
+from app.infrastructure.runner.factory import get_runner_provider
 from app.models.enums import TestRunVerdict
+from app.schemas.assignment import TestCaseConfig
 from tests.fixtures.tenants import TenantContext
 
 
@@ -73,7 +75,11 @@ async def test_runner_live_real_network_execution_e2e(
     # 3. Aluno envia código Python real para o executor remoto
     response = await async_client.post(
         f"/api/v1/assignments/{assignment_id}/test-run",
-        json={"language": "python3", "code": code},
+        json={
+            "language": "python3",
+            "code": code,
+            "test_cases": [{"id": 1, "input": "10 20\n", "expected_output": "30\n"}],
+        },
         headers=tenant.student.auth_headers,
     )
 
@@ -85,3 +91,32 @@ async def test_runner_live_real_network_execution_e2e(
     assert data["results"][0]["status"] == verdict
     if verdict == TestRunVerdict.ACCEPTED:
         assert "30" in data["results"][0]["stdout"]
+
+
+@pytest.mark.live("runner")
+@pytest.mark.asyncio
+async def test_runner_live_execution_above_default_timeout_should_complete() -> None:
+    results = await get_runner_provider().execute_batch(
+        code="import time\ntime.sleep(16)\nprint('ok')",
+        language="python3",
+        test_cases=[TestCaseConfig(id=1, input="", expected_output="ok\n")],
+        time_limit_sec=20,
+        memory_limit_mb=128,
+    )
+
+    assert results[0].status == TestRunVerdict.ACCEPTED
+    assert results[0].stdout == "ok\n"
+
+
+@pytest.mark.live("runner")
+@pytest.mark.asyncio
+async def test_runner_live_cpu_above_three_seconds_should_complete() -> None:
+    results = await get_runner_provider().execute_batch(
+        code="import time\nstart = time.process_time()\nwhile time.process_time() - start < 4: pass\nprint('ok')",
+        language="python3",
+        test_cases=[TestCaseConfig(id=1, input="", expected_output="ok\n")],
+        time_limit_sec=10,
+        memory_limit_mb=128,
+    )
+
+    assert results[0].status == TestRunVerdict.ACCEPTED

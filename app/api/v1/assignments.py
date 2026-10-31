@@ -160,7 +160,8 @@ async def delete_assignment(
 async def test_run_assignment(
     request: TestRunRequest,
     context: Annotated[
-        AssignmentContext, Depends(require_assignment_permission(can_view=True))
+        AssignmentContext,
+        Depends(require_assignment_permission(must_be_teacher_or_student=True)),
     ],
 ) -> TestRunResponse:
     return await runner_service.execute_test_run(

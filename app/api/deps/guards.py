@@ -103,6 +103,7 @@ def require_assignment_permission(
     must_be_enrolled_student: bool = False,
     must_be_teacher: bool = False,
     must_be_staff: bool = False,
+    must_be_teacher_or_student: bool = False,
 ) -> Callable[..., AssignmentContext]:
     """Guard declarativo para autorização no contexto de atividades.
 
@@ -112,11 +113,18 @@ def require_assignment_permission(
         must_be_enrolled_student: Exige que o membro seja um aluno formalmente matriculado na turma.
         must_be_teacher: Exige estritamente o professor responsável da turma.
         must_be_staff: Exige o professor da turma ou a coordenação institucional (Admin ou Owner).
+        must_be_teacher_or_student: Exige o professor responsável ou aluno matriculado.
     """
 
     def dependency(
         context: Annotated[AssignmentContext, Depends(get_assignment_context)],
     ) -> AssignmentContext:
+        if must_be_teacher_or_student and not (
+            context.is_teacher_of_class or context.is_enrolled_student
+        ):
+            raise ForbiddenException(
+                "Acesso negado: apenas o professor responsável ou alunos matriculados podem realizar esta ação."
+            )
         if must_be_enrolled_student and not context.is_enrolled_student:
             raise ForbiddenException(
                 "Acesso negado: apenas alunos matriculados na sala de aula podem realizar esta ação."

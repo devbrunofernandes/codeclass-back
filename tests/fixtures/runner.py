@@ -146,32 +146,36 @@ def override_runner_provider(
 
 
 @pytest.fixture
-def valid_test_run_payload() -> dict[str, str]:
+def valid_test_run_payload() -> dict[str, Any]:
     return {
         "language": "python3",
         "code": "import sys\na, b = map(int, sys.stdin.read().split())\nprint(a + b)",
+        "test_cases": [{"id": 1, "input": "2 3\n", "expected_output": "5\n"}],
     }
 
 
 @pytest.fixture
-def wrong_answer_test_run_payload() -> dict[str, str]:
+def wrong_answer_test_run_payload() -> dict[str, Any]:
     return {
         "language": "python3",
         "code": "print(0)",
+        "test_cases": [{"id": 1, "input": "2 3\n", "expected_output": "5\n"}],
     }
 
 
 @pytest.fixture
-def tle_test_run_payload() -> dict[str, str]:
+def tle_test_run_payload() -> dict[str, Any]:
     return {
         "language": "python3",
         "code": "while True: pass",
+        "test_cases": [{"id": 1, "input": "2 3\n", "expected_output": "5\n"}],
     }
 
 
 @pytest.fixture
-def compilation_error_test_run_payload() -> dict[str, str]:
+def compilation_error_test_run_payload() -> dict[str, Any]:
     return {
         "language": "python3",
         "code": "def erro_sintaxe(",
+        "test_cases": [{"id": 1, "input": "2 3\n", "expected_output": "5\n"}],
     }
