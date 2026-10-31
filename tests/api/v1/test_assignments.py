@@ -11,6 +11,37 @@ from tests.conftest import TenantContext
 # --- Testes de Criação (POST /classrooms/{id}/assignments) ---
 
 
+@pytest.mark.parametrize("value", [None, "true", 1])
+@pytest.mark.asyncio
+async def test_update_assignment_when_restriction_is_not_boolean_should_return_422(
+    async_client, tenant, assignment_without_submissions, value
+):
+    response = await async_client.patch(
+        f"/api/v1/assignments/{assignment_without_submissions.id}",
+        json={"restrict_student_actions": value},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("value", [None, "true", 1])
+@pytest.mark.asyncio
+async def test_create_assignment_when_restriction_is_not_boolean_should_return_422(
+    async_client, tenant, classroom, value
+):
+    response = await async_client.post(
+        f"/api/v1/classrooms/{classroom.id}/assignments",
+        json={
+            "title": "Tarefa",
+            "type": "code",
+            "restrict_student_actions": value,
+            "config": {"statement": "Resolva", "languages": [{"name": "python3"}]},
+        },
+        headers=tenant.teacher.auth_headers,
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize("statement", ["", "Enunciado válido"])
 @pytest.mark.asyncio
 async def test_update_assignment_when_config_mixes_types_should_return_422(

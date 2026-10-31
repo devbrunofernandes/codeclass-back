@@ -4,7 +4,14 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    model_validator,
+)
 
 from app.models.enums import AssignmentType, ReleasePolicyType, SubmissionStatus
 
@@ -122,6 +129,7 @@ class AssignmentCreateRequest(BaseModel):
     type: AssignmentType
     release_policy: ReleasePolicyType = ReleasePolicyType.ON_REVIEW
     deadline: datetime | None = None
+    restrict_student_actions: StrictBool = False
     config: CodeAssignmentConfig | QuestionnaireAssignmentConfig
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -180,6 +188,7 @@ class AssignmentUpdateRequest(BaseModel):
     description: str | None = None
     release_policy: ReleasePolicyType | None = None
     deadline: datetime | None = None
+    restrict_student_actions: StrictBool | None = None
     config: CodeAssignmentConfig | QuestionnaireAssignmentConfig | None = None
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -187,6 +196,12 @@ class AssignmentUpdateRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_config_shape(cls, data: Any) -> Any:
+        if (
+            isinstance(data, dict)
+            and "restrict_student_actions" in data
+            and data["restrict_student_actions"] is None
+        ):
+            raise ValueError("restrict_student_actions deve ser um booleano.")
         if isinstance(data, dict) and isinstance(data.get("config"), dict):
             config = data["config"]
             if "languages" in config and "questions" in config:
@@ -199,7 +214,7 @@ class AssignmentUpdateRequest(BaseModel):
 # --- Modelos de Resposta ---
 
 
-class AssignmentTeacherResponse(BaseModel):
+class AssignmentResponseBase(BaseModel):
     id: UUID
     classroom_id: UUID
     title: str
@@ -207,26 +222,20 @@ class AssignmentTeacherResponse(BaseModel):
     type: AssignmentType
     release_policy: ReleasePolicyType
     deadline: datetime | None
+    restrict_student_actions: bool = False
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssignmentTeacherResponse(AssignmentResponseBase):
     config: (
         CodeAssignmentResponseConfig | QuestionnaireAssignmentConfig | dict[str, Any]
     )
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
 
 
-class AssignmentStudentResponse(BaseModel):
-    id: UUID
-    classroom_id: UUID
-    title: str
-    description: str
-    type: AssignmentType
-    release_policy: ReleasePolicyType
-    deadline: datetime | None
+class AssignmentStudentResponse(AssignmentResponseBase):
     config: CodeAssignmentStudentConfig | QuestionnaireAssignmentStudentConfig
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -264,6 +273,7 @@ class AssignmentStudentResponse(BaseModel):
                 "type": data.type,
                 "release_policy": data.release_policy,
                 "deadline": data.deadline,
+                "restrict_student_actions": data.restrict_student_actions,
                 "config": parsed_cfg,
                 "created_at": data.created_at,
             }
@@ -297,21 +307,11 @@ class StudentAssignmentSubmissionBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class StudentAssignmentItemResponse(BaseModel):
-    id: UUID
-    classroom_id: UUID
+class StudentAssignmentItemResponse(AssignmentResponseBase):
     classroom_name: str
-    title: str
-    description: str
-    type: AssignmentType
-    release_policy: ReleasePolicyType
-    deadline: datetime | None
-    created_at: datetime
     student_status: StudentAssignmentStatus
     has_draft: bool
     submission: StudentAssignmentSubmissionBrief | None = None
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class StudentAssignmentsSummaryResponse(BaseModel):

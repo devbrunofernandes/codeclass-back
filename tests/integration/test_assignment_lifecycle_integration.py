@@ -12,6 +12,17 @@ from tests.conftest import TenantContext
 
 
 @pytest.mark.asyncio
+async def test_assignment_restriction_column_when_changed_should_persist(
+    assignment_without_submissions: Assignment, db_session: AsyncSession
+):
+    assert assignment_without_submissions.restrict_student_actions is False
+    assignment_without_submissions.restrict_student_actions = True
+    await db_session.commit()
+    await db_session.refresh(assignment_without_submissions)
+    assert assignment_without_submissions.restrict_student_actions is True
+
+
+@pytest.mark.asyncio
 async def test_full_assignment_lifecycle_and_security(
     async_client: AsyncClient, tenant: TenantContext, db_session: AsyncSession
 ):
@@ -39,6 +50,7 @@ async def test_full_assignment_lifecycle_and_security(
         "type": "code",
         "release_policy": "on_review",
         "deadline": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
+        "restrict_student_actions": True,
         "config": {
             "statement": "Implemente as rotações.\nPreserve as propriedades da árvore.",
             "languages": [{"name": "python3", "starter_code": "class RBTree: pass"}],
@@ -58,6 +70,8 @@ async def test_full_assignment_lifecycle_and_security(
     assert create_res.status_code == 201
     code_assignment_id = create_res.json()["id"]
     assert "rubric" in create_res.json()["config"]
+    assert create_res.json()["restrict_student_actions"] is True
+    assert "restrict_student_actions" not in create_res.json()["config"]
 
     # 3. Aluno consulta a atividade criada: verifica conformidade com HLD 9.4 (zero vazamento de rubrica)
     student_get_res = await async_client.get(
@@ -69,9 +83,11 @@ async def test_full_assignment_lifecycle_and_security(
     assert "rubric" not in student_data["config"]
     assert len(student_data["config"]["test_cases"]) == 1
     assert student_data["config"]["statement"] == code_payload["config"]["statement"]
+    assert student_data["restrict_student_actions"] is True
     persisted = await db_session.get(Assignment, uuid.UUID(code_assignment_id))
     assert persisted is not None
     assert persisted.config["statement"] == code_payload["config"]["statement"]
+    assert persisted.restrict_student_actions is True
 
     # 4. Aluno lista atividades da turma
     list_res = await async_client.get(
@@ -81,6 +97,19 @@ async def test_full_assignment_lifecycle_and_security(
     assert list_res.status_code == 200
     assert len(list_res.json()) == 1
     assert "rubric" not in list_res.json()[0]["config"]
+    assert list_res.json()[0]["restrict_student_actions"] is True
+    my_res = await async_client.get(
+        "/api/v1/assignments/my-assignments", headers=tenant.student.auth_headers
+    )
+    assert my_res.status_code == 200
+    assert my_res.json()[0]["restrict_student_actions"] is True
+
+    preserve_res = await async_client.patch(
+        f"/api/v1/assignments/{code_assignment_id}",
+        json={"title": "Árvore"},
+        headers=tenant.teacher.auth_headers,
+    )
+    assert preserve_res.json()["restrict_student_actions"] is True
     assert list_res.json()[0]["config"]["statement"] == persisted.config["statement"]
 
     # Atualiza o enunciado e confirma persistência e visibilidade discente.
@@ -90,18 +119,20 @@ async def test_full_assignment_lifecycle_and_security(
     }
     updated = await async_client.patch(
         f"/api/v1/assignments/{code_assignment_id}",
-        json={"config": updated_config},
+        json={"config": updated_config, "restrict_student_actions": False},
         headers=tenant.teacher.auth_headers,
     )
     assert updated.status_code == 200
     await db_session.refresh(persisted)
     assert persisted.config["statement"] == updated_config["statement"]
+    assert persisted.restrict_student_actions is False
     student_updated = await async_client.get(
         f"/api/v1/assignments/{code_assignment_id}",
         headers=tenant.student.auth_headers,
     )
     assert student_updated.status_code == 200
     assert student_updated.json()["config"]["statement"] == updated_config["statement"]
+    assert student_updated.json()["restrict_student_actions"] is False
     assert "rubric" not in student_updated.json()["config"]
 
     # 5. Professor atualiza prazo e título da tarefa

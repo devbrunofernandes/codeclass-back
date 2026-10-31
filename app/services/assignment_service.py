@@ -47,6 +47,7 @@ class AssignmentService:
             type=request.type,
             release_policy=request.release_policy,
             deadline=request.deadline,
+            restrict_student_actions=request.restrict_student_actions,
             config=config_data,
         )
         db.add(assignment)
@@ -111,6 +112,8 @@ class AssignmentService:
             assignment.description = request.description
         if request.release_policy is not None:
             assignment.release_policy = request.release_policy
+        if request.restrict_student_actions is not None:
+            assignment.restrict_student_actions = request.restrict_student_actions
         if "deadline" in request.model_fields_set:
             assignment.deadline = request.deadline
 
@@ -264,6 +267,7 @@ class AssignmentService:
                     type=assignment.type,
                     release_policy=assignment.release_policy,
                     deadline=assignment.deadline,
+                    restrict_student_actions=assignment.restrict_student_actions,
                     created_at=assignment.created_at,
                     student_status=student_status,
                     has_draft=has_draft,

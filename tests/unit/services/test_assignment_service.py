@@ -10,6 +10,89 @@ from app.schemas.assignment import AssignmentUpdateRequest
 from app.services.assignment_service import AssignmentService
 
 
+@pytest.mark.parametrize("kind", [AssignmentType.CODE, AssignmentType.QUESTIONNAIRE])
+@pytest.mark.parametrize("is_student", [True, False])
+def test_serialize_legacy_assignment_when_flag_missing_should_default_false(
+    kind, is_student
+):
+    config = (
+        {
+            "languages": [{"name": "python3"}],
+            "time_limit_sec": 2,
+            "memory_limit_mb": 128,
+            "test_cases": [],
+        }
+        if kind == AssignmentType.CODE
+        else {
+            "questions": [
+                {"id": 1, "type": "open", "points": 1, "statement": "Explique"}
+            ]
+        }
+    )
+    assignment = Assignment(
+        id=uuid4(),
+        classroom_id=uuid4(),
+        title="Legado",
+        description="",
+        type=kind,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        created_at=datetime.now(UTC),
+        restrict_student_actions=False,
+        config=config,
+    )
+    result = AssignmentService().serialize_assignment_for_member(assignment, is_student)
+    assert result.model_dump()["restrict_student_actions"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [AssignmentType.CODE, AssignmentType.QUESTIONNAIRE])
+async def test_update_assignment_when_flag_omitted_should_preserve_existing_value(kind):
+    config = (
+        {"statement": "Resolva", "languages": [{"name": "python3"}]}
+        if kind == AssignmentType.CODE
+        else {
+            "questions": [
+                {"id": 1, "type": "open", "points": 1, "statement": "Explique"}
+            ]
+        }
+    )
+    assignment = Assignment(
+        type=kind,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        config=config,
+        restrict_student_actions=True,
+    )
+    await AssignmentService().update_assignment(
+        assignment, AssignmentUpdateRequest(config=config), AsyncMock()
+    )
+    assert assignment.restrict_student_actions is True
+
+
+@pytest.mark.parametrize("is_student", [True, False])
+def test_serialize_assignment_when_restrictions_enabled_should_expose_flag(is_student):
+    assignment = Assignment(
+        id=uuid4(),
+        classroom_id=uuid4(),
+        title="Tarefa",
+        description="",
+        type=AssignmentType.CODE,
+        release_policy=ReleasePolicyType.ON_REVIEW,
+        created_at=datetime.now(UTC),
+        restrict_student_actions=True,
+        config={
+            "statement": "Resolva",
+            "languages": [{"name": "python3"}],
+            "time_limit_sec": 2,
+            "memory_limit_mb": 128,
+            "test_cases": [],
+        },
+    )
+    response = AssignmentService().serialize_assignment_for_member(
+        assignment, is_student
+    )
+    assert response.model_dump()["restrict_student_actions"] is True
+
+
 @pytest.mark.asyncio
 async def test_update_assignment_when_statement_changes_should_persist_and_sanitize():
     assignment = Assignment(
@@ -20,6 +103,7 @@ async def test_update_assignment_when_statement_changes_should_persist_and_sanit
         type=AssignmentType.CODE,
         release_policy=ReleasePolicyType.ON_REVIEW,
         created_at=datetime.now(UTC),
+        restrict_student_actions=False,
         config={
             "statement": "Original",
             "languages": [{"name": "python3"}],
@@ -57,6 +141,7 @@ def test_serialize_assignment_when_legacy_config_should_allow_missing_statement(
         type=AssignmentType.CODE,
         release_policy=ReleasePolicyType.ON_REVIEW,
         created_at=datetime.now(UTC),
+        restrict_student_actions=False,
         config={
             "languages": [{"name": "python3"}],
             "time_limit_sec": 2,
